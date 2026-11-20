@@ -38,7 +38,7 @@ stdout 是严格 JSONL 协议记录（写入 `pi-rpc.log`），stderr 是诊断�
 
 | 变量 | 用途 | 来源 |
 | --- | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-channels 用） | `.env` |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 用） | `.env` |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址，默认 `http://i-nhi.zhejianglab.org/maas/v1` | `.env` |
 | `LITELLM_API_KEY` | 网关密钥，未设置时 `maas` provider 注册失败 | `.env` |
 | `LITELLM_DEFAULT_MODEL` | 新建会话默认模型，缺省 `GLM-5.3` | `.env` |

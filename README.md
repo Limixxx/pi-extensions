@@ -46,7 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 
 | 变量 | 说明 |
 | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-channels 使用） |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 使用） |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址 |
 | `LITELLM_API_KEY` | 网关密钥，缺失时 `maas` provider 注册失败 |
 | `LITELLM_DEFAULT_MODEL` | 新建会话默认模型 |
@@ -75,28 +75,7 @@ $client.Dispose()
 
 `stop.ps1` 先结束 keeper，使 pi 读到 stdin EOF 后有序退出，等待超时再用 `taskkill /T /F` 兜底。
 
-
-## 其他组件
-
-### pi-app-server
-
-```bash
-pi install npm:pi-app-server
-npx pi-server serve --port 3141 --provider maas --model GLM-5.3
-npx pi-server serve --port 3141
-PI_VERSION=$(cat /root/.pi/agent/install/current-version)
-npx pi-server serve --port 3141 --pi-cli-path ~/.pi/agent/install/releases/1.5.2/node_modules/@earendil-workspce/pi-coding-agent/dist/bundle/cli.js
-```
-
-### pi-channels
-
-已集成到 pi 框架中，通过 `settings.json` 配置。
-
-```bash
-pi install npm:@amaster.ai/pi-channels
-```
-
-### pi-feishu
+## pi-feishu 扩展
 
 ```bash
 pi install npm:pi-feishu
