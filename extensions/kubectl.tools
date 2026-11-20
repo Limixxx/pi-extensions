@@ -1,0 +1,28 @@
+# kubectl 子命令白名单 (kubectl.tools)
+#
+# 每行一个允许的子命令，按前缀匹配放行：
+#   get          允许所有 kubectl get ...（get pods / get nodes -o wide 等）
+#   get pods     仅允许 kubectl get pods ...（get deployments 等会被拒绝）
+#   kubectl get  与 get 等价（行首的 kubectl 前缀会被忽略）
+#
+# 规则：
+#   - 以 # 开头的行与空行忽略
+#   - 未列出的子命令一律拒绝（默认拒绝）
+#   - 全局 flag（如 -n / --context / -o）不受白名单限制，
+#     但必须放在子命令之后，放在最前面会被拒绝
+#   - 每次工具调用都会重新读取本文件，修改后立即生效，无需重启
+#
+# 默认只放行只读子命令，变更类命令（apply/delete/edit/scale 等）按需添加。
+get
+describe
+explain
+logs
+events
+top
+api-resources
+api-versions
+version
+diff
+config view
+config current-context
+config get-contexts
