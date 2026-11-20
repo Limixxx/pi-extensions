@@ -3,15 +3,10 @@
 .env.local
 
 # —— 运行时产物 ——
-agent/
-node_modules/
-channel-sessions/*.log
-channel-sessions/*.pid
-channel-sessions/pi-server.pid
-channel-sessions/pi-server.stdout.log
-channel-sessions/pi-server.stderr.log
+sessions/*.log
+sessions/*.pid
+sessions/*.info
+sessions/*.fifo
+
 *.lock
 *.tmp
-
-# —— 保留空目录 ——
-!channel-sessions/.keep
