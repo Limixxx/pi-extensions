@@ -8,3 +8,6 @@ npx pi-server serve --port 3141 --pi-cli-path ~/.pi/agent/install/releases/1.5.2
 ## pi-channels
 集成到了PI框架中，通过settings.json配置。
 pi install npm:@amaster.ai/pi-channels
+
+## pi
+pi --mode rpc
