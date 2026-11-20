@@ -14,13 +14,22 @@ scripts/start.sh           # 后台启动 pi --mode rpc
 scripts/stop.sh            # 停止后台 pi
 ```
 
+Windows（PowerShell）：
+
+```powershell
+cd NanHuInfer\.pi
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\init.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
+```
+
 运行状态在 `sessions/`：`pi-rpc.pid`（进程号）、`pi-rpc.info`（启动信息）、`pi-rpc.fifo`（命令入口）、`pi-rpc.log`（stdout 协议记录）、`pi-rpc.err.log`（stderr 诊断）。这些文件已被忽略，不入库。
 
 ## 目录结构
 
 ```text
 .pi/
-├── scripts/           init.sh / start.sh / stop.sh
+├── scripts/           init / start / stop 的 sh 与 ps1 版本
 ├── extensions/        litellm-provider.ts / kubectl.ts / kubectl.tools / gh_tools.ts
 ├── sessions/          运行时 pid、日志、FIFO（仅 .keep 入库）
 ├── .env / .env.example 凭证与网关配置（.env 不入库）
@@ -52,6 +61,20 @@ printf '%s\n' '{"id":"1","type":"get_state"}' > .pi/sessions/pi-rpc.fifo
 ```
 
 协议细节见 pi 自带文档 `docs/rpc.md` 与 `docs/rpc-commands.md`。
+
+Windows 没有 FIFO，`start.ps1` 改由 keeper 进程持有 pi 的 stdin，并用命名管道 `\\.\pipe\pi-rpc-<hash>` 接收命令；管道名记录在 `pi-rpc.info` 的 `pipe=` 字段中。客户端写法：
+
+```powershell
+$client = [System.IO.Pipes.NamedPipeClientStream]::new('.', '<pipe 名>', [System.IO.Pipes.PipeDirection]::Out)
+$client.Connect(3000)
+$writer = [System.IO.StreamWriter]::new($client)
+$writer.WriteLine('{"id":"1","type":"get_state"}')
+$writer.Flush()
+$client.Dispose()
+```
+
+`stop.ps1` 先结束 keeper，使 pi 读到 stdin EOF 后有序退出，等待超时再用 `taskkill /T /F` 兜底。
+
 
 ## 其他组件
 
