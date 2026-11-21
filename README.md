@@ -1,11 +1,11 @@
-# NanHuInfer · PI 工作区
+# PI 工作区
 
-NanHuInfer 使用的 [pi](https://pi.dev) 配置与扩展集合：自定义 provider、工具扩展、队列启动脚本。本目录是独立 Git 仓库（`origin` 为 `Limixxx/pi-extensions`）。
+[pi](https://pi.dev) 工作区配置与扩展集合：自定义 provider、工具扩展、队列启动脚本。本目录是独立 Git 仓库（`origin` 为 `Limixxx/pi-extensions`），可放入任意项目的 `.pi` 目录使用。
 
 ## 快速开始
 
 ```bash
-cd NanHuInfer/.pi
+cd .pi
 chmod +x scripts/*.sh      # 仓库未记录可执行位，首次检出后执行
 cp .env.example .env       # 填写飞书凭证与 MaaS 网关配置
 
@@ -17,7 +17,7 @@ scripts/stop.sh            # 停止后台 pi
 Windows（PowerShell）：
 
 ```powershell
-cd NanHuInfer\.pi
+cd .pi
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\init.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
@@ -36,10 +36,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 └── AGENT.md           面向 agent 的详细约定
 ```
 
-- `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）。
+- `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）；未设置 `LITELLM_API_KEY` 时不启用该插件。
 - `extensions/kubectl.ts` + `kubectl.tools`：注册 `kubectl` 工具，按白名单前缀匹配，未列出的子命令默认拒绝，白名单改完立即生效。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具，封装本机 `gh` CLI。
-- `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文。
+- `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文与 [extensions/webserver/README.md](extensions/webserver/README.md)。
 
 ## 环境变量
 
@@ -47,9 +47,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 
 | 变量 | 说明 |
 | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-channels 使用） |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 使用，环境变量优先于 settings.json） |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址 |
-| `LITELLM_API_KEY` | 网关密钥，缺失时 `maas` provider 注册失败 |
+| `LITELLM_API_KEY` | 网关密钥，缺失时不启用 `maas` provider 插件 |
 | `LITELLM_DEFAULT_MODEL` | 新建会话默认模型 |
 | `KUBECTL_TOOLS_FILE` | 覆盖 kubectl 白名单路径（可选） |
 | `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用（可选） |
@@ -92,38 +92,20 @@ $client.Dispose()
 
 `start.sh` / `start.ps1` 启动完成后会读取 `sessions/pi-web.info` 并打印访问地址。安全说明：默认只监听 `127.0.0.1`，本机访问无需令牌；如需远程访问，设置 `PI_WEB_HOST=0.0.0.0` 并务必同时设置 `PI_WEB_TOKEN`。静态页面不鉴权，所有 `/api` 数据接口需携带令牌。扩展日志全部走 stderr，不会污染 RPC stdout 协议。
 
-接口清单：`GET /api/health|status|activity|logs|logs/download|tools|commands|plugins|session|sessions`，`POST /api/tools/active|abort|compact|shutdown`，返回 JSON。
+接口清单、`pi-web.info` 文件格式与实现细节见 [extensions/webserver/README.md](extensions/webserver/README.md)。
 
 
-## 其他组件
+## pi-feishu 扩展
 
-### pi-app-server
-
-```bash
-pi install npm:pi-app-server
-npx pi-server serve --port 3141 --provider maas --model GLM-5.3
-npx pi-server serve --port 3141
-PI_VERSION=$(cat /root/.pi/agent/install/current-version)
-npx pi-server serve --port 3141 --pi-cli-path ~/.pi/agent/install/releases/1.5.2/node_modules/@earendil-workspce/pi-coding-agent/dist/bundle/cli.js
-```
-
-### pi-channels
-
-已集成到 pi 框架中，通过 `settings.json` 配置。
-
-```bash
-pi install npm:@amaster.ai/pi-channels
-```
-
-### pi-feishu
+飞书接入由 `npm:pi-feishu` 提供，`scripts/init.sh` 负责安装与版本更新，支持流式输出：
 
 ```bash
 pi install npm:pi-feishu
 ```
 
-支持流式输出。
+凭证读取顺序：环境变量 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 优先于 settings.json 中的配置。
 
 ## 约定
 
 - 不提交 `.env`、日志、pid、fifo 等运行时产物。
-- 修改扩展或脚本前先阅读 [AGENT.md](AGENT.md)；NanHuInfer 自身的协作规范见仓库根目录 [AGENT.md](../AGENT.md)。
+- 修改扩展或脚本前先阅读 [AGENT.md](AGENT.md)。
