@@ -17,9 +17,12 @@ const CONFIG = {
 };
 
 export default async function(pi: ExtensionAPI) {
+  // 必需的 LITELLM_API_KEY 未配置时不启用该插件：
+  // 不注册 provider、不设置默认模型，仅提示后正常返回，不抛错
   if (!CONFIG.apiKey) {
-    console.error(`自定义 ${CONFIG.providerId} provider 未配置 LITELLM_API_KEY 环境变量`);
-    throw new Error(`LITELLM_API_KEY 未设置，无法注册 ${CONFIG.providerId} provider`);
+    // 必须走 stderr：RPC 模式下 stdout 是严格 JSONL 协议流，console.log 会污染协议
+    console.error(`未配置 LITELLM_API_KEY 环境变量，跳过 ${CONFIG.providerId} provider 注册（插件未启用）`);
+    return;
   }
 
   try {
