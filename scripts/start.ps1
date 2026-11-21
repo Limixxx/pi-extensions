@@ -22,6 +22,7 @@ $PidFile   = Join-Path $SessDir 'pi-rpc.pid'
 $InfoFile  = Join-Path $SessDir 'pi-rpc.info'
 $LogFile   = Join-Path $SessDir 'pi-rpc.log'
 $ErrFile   = Join-Path $SessDir 'pi-rpc.err.log'
+$WebInfoFile = Join-Path $SessDir 'pi-web.info'
 
 # 命名管道按工作目录区分，避免多项目互相冲突
 $sha = [System.Security.Cryptography.SHA1]::Create()
@@ -163,6 +164,8 @@ if (-not $psExe -or $psExe -match 'ise\.exe$') {
 }
 
 Remove-Item -LiteralPath $InfoFile -Force -ErrorAction SilentlyContinue
+# 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）
+Remove-Item -LiteralPath $WebInfoFile -Force -ErrorAction SilentlyContinue
 
 $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Keeper"
 $keeperInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -214,3 +217,16 @@ Write-Log "输出日志: $LogFile"
 Write-Log "错误日志: $ErrFile"
 Write-Log "进程信息: $InfoFile"
 Write-Log "停止: $(Join-Path $ScriptDir 'stop.ps1')"
+
+# 等待并显示进程管理 Web UI（由 extensions/webserver 在 RPC 模式自动启动）
+$webDeadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $webDeadline) {
+    if (Test-Path -LiteralPath $WebInfoFile) { break }
+    Start-Sleep -Milliseconds 500
+}
+if (Test-Path -LiteralPath $WebInfoFile) {
+    $webUrl = (Get-Content -LiteralPath $WebInfoFile | Where-Object { $_ -match '^url=' }) -replace '^url=', ''
+    if ($webUrl) { Write-Log "进程管理界面: $webUrl" }
+} else {
+    Write-Log '进程管理界面: 未启动（可用 PI_WEB_ENABLED/PI_WEB_PORT 控制，见 .env.example）'
+}

@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi 进程管理</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel2: #1c2129; --border: #30363d;
+  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950;
+  --red: #f85149; --yellow: #d29922; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text); min-height: 100vh;
+  font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 14px 22px; border-bottom: 1px solid var(--border); background: var(--panel);
+  position: sticky; top: 0; z-index: 10;
+}
+.brand { font-size: 17px; font-weight: 700; }
+.brand .dot { color: var(--green); margin-right: 4px; }
+.hspace { flex: 1; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+  border: 1px solid var(--border); border-radius: 999px; font-size: 12px; color: var(--muted);
+  font-family: var(--mono); white-space: nowrap;
+}
+.badge b { color: var(--text); font-weight: 600; }
+.badge.ok b { color: var(--green); }
+.badge.busy b { color: var(--yellow); }
+.badge.err b { color: var(--red); }
+nav { display: flex; gap: 4px; padding: 10px 22px 0; border-bottom: 1px solid var(--border); background: var(--panel); }
+nav button {
+  background: none; border: 1px solid transparent; border-bottom: none; color: var(--muted);
+  padding: 8px 18px; font-size: 14px; cursor: pointer; border-radius: 6px 6px 0 0;
+}
+nav button:hover { color: var(--text); }
+nav button.active { background: var(--bg); color: var(--text); border-color: var(--border); margin-bottom: -1px; }
+main { padding: 20px 22px 60px; max-width: 1280px; margin: 0 auto; }
+section[hidden] { display: none; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px 18px; margin-bottom: 16px;
+}
+.card h3 { font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+.kv .k { color: var(--muted); }
+.kv .v { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.kv .v.wrap { font-family: inherit; font-size: 13px; word-break: break-word; }
+.btn {
+  background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 14px; font-size: 13px; cursor: pointer; margin-right: 8px; margin-bottom: 8px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.btn.danger { background: #da3633; border-color: #da3633; color: #fff; }
+.btn.danger:hover { background: #b62324; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.toolbar label { color: var(--muted); font-size: 13px; }
+select, input[type=text], input[type=number] {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font-size: 13px; font-family: var(--mono);
+}
+input[type=checkbox] { accent-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.mono, th.mono { font-family: var(--mono); font-size: 12px; }
+td .desc { color: var(--muted); font-size: 12px; display: block; max-width: 520px; }
+table tbody tr:hover { background: rgba(255,255,255,.03); }
+pre.log {
+  background: #0a0d12; border: 1px solid var(--border); border-radius: 6px; padding: 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow: auto;
+  max-height: 65vh; white-space: pre-wrap; word-break: break-all;
+}
+pre.code { background: #0a0d12; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: var(--mono); font-size: 12px; overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
+.feed { max-height: 46vh; overflow: auto; }
+.feed-item { display: flex; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.feed-item .t { color: var(--muted); font-family: var(--mono); font-size: 12px; flex-shrink: 0; }
+.feed-item .icon { flex-shrink: 0; width: 18px; text-align: center; }
+.feed-item .kind { color: var(--accent); font-family: var(--mono); font-size: 12px; flex-shrink: 0; }
+.feed-item .data { color: var(--muted); word-break: break-all; }
+.feed-item .data b { color: var(--text); font-weight: 500; }
+.feed-item.err .kind { color: var(--red); }
+.chip { display: inline-block; border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; margin: 2px 4px 2px 0; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--panel2); }
+.chip small { color: var(--muted); }
+.pill { display: inline-block; border-radius: 999px; padding: 0 8px; font-size: 11px; font-family: var(--mono); border: 1px solid var(--border); color: var(--muted); }
+.pill.on { color: var(--green); border-color: var(--green); }
+.pill.off { color: var(--muted); }
+.pill.warn { color: var(--yellow); border-color: var(--yellow); }
+details { margin-top: 10px; }
+details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+details[open] summary { margin-bottom: 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 100;
+  background: #21262d; border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px;
+  font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw;
+}
+#toast.show { opacity: 1; }
+#toast.err { border-color: var(--red); color: var(--red); }
+#toast.ok { border-color: var(--green); color: var(--green); }
+#error-bar { background: #3d1d1d; color: #ffb1ad; padding: 8px 22px; font-size: 13px; display: none; }
+#modal-back {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200;
+  align-items: center; justify-content: center;
+}
+#modal-back.show { display: flex; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 24px; width: 420px; max-width: 92vw;
+}
+.modal h3 { margin-bottom: 10px; font-size: 15px; }
+.modal p { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.modal input { width: 100%; margin-bottom: 14px; }
+.modal .row { display: flex; justify-content: flex-end; gap: 8px; }
+.actions { margin: 4px 0 16px; }
+.hint { font-size: 12px; color: var(--muted); margin: 6px 0 14px; }
+</style>
+</head>
+<body>
+<div id="error-bar"></div>
+<header>
+  <div class="brand"><span class="dot">●</span>pi 进程管理</div>
+  <div class="hspace"></div>
+  <span id="badge-state" class="badge">状态连接中…</span>
+  <span id="badge-model" class="badge">模型 <b>—</b></span>
+  <span id="badge-pid" class="badge">PID <b>—</b></span>
+  <span id="badge-uptime" class="badge">运行 <b>—</b></span>
+</header>
+
+<nav>
+  <button data-tab="overview" class="active">概览</button>
+  <button data-tab="logs">日志</button>
+  <button data-tab="plugins">插件与工具</button>
+  <button data-tab="session">会话</button>
+</nav>
+
+<main>
+  <!-- ===== 概览 ===== -->
+  <section id="tab-overview">
+    <div class="grid">
+      <div class="card">
+        <h3>进程</h3>
+        <div class="kv" id="kv-process"></div>
+      </div>
+      <div class="card">
+        <h3>会话</h3>
+        <div class="kv" id="kv-session"></div>
+      </div>
+      <div class="card">
+        <h3>Web 服务</h3>
+        <div class="kv" id="kv-web"></div>
+      </div>
+      <div class="card">
+        <h3>统计</h3>
+        <div class="kv" id="kv-stats"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>操作</h3>
+      <div class="actions">
+        <button class="btn primary" id="btn-refresh">刷新状态</button>
+        <button class="btn" id="btn-abort">中止当前任务</button>
+        <button class="btn" id="btn-compact">压缩会话上下文</button>
+        <button class="btn danger" id="btn-shutdown">停止 pi 进程</button>
+      </div>
+      <div class="hint">「停止 pi 进程」会结束整个 pi RPC 进程，飞书等客户端将断开，需重新执行 start 脚本。</div>
+    </div>
+    <div class="card">
+      <h3>最近活动</h3>
+      <div class="feed" id="activity-feed"></div>
+    </div>
+  </section>
+
+  <!-- ===== 日志 ===== -->
+  <section id="tab-logs" hidden>
+    <div class="card">
+      <div class="toolbar">
+        <label>来源</label>
+        <select id="log-name">
+          <option value="stdout">stdout（RPC 协议 JSONL）</option>
+          <option value="stderr">stderr（诊断日志）</option>
+        </select>
+        <label>末尾行数</label>
+        <select id="log-lines">
+          <option>100</option><option selected>300</option>
+          <option>1000</option><option>3000</option>
+        </select>
+        <label>过滤</label>
+        <input type="text" id="log-filter" placeholder="关键字（区分大小写）" style="width:200px">
+        <button class="btn primary" id="btn-log-refresh">刷新</button>
+        <label><input type="checkbox" id="log-auto"> 自动刷新（5s）</label>
+        <span class="hspace"></span>
+        <a class="btn" id="log-download" download>下载完整日志</a>
+      </div>
+      <div class="hint" id="log-meta">—</div>
+      <pre class="log" id="log-view">（尚未加载）</pre>
+    </div>
+  </section>
+
+  <!-- ===== 插件与工具 ===== -->
+  <section id="tab-plugins" hidden>
+    <div class="card">
+      <h3>活跃工具集（pi 对模型声明的工具）</h3>
+      <div class="toolbar">
+        <button class="btn primary" id="btn-tools-save">保存工具勾选</button>
+        <button class="btn" id="btn-tools-refresh">刷新</button>
+        <span class="muted small" id="tools-count"></span>
+      </div>
+      <div class="hint">勾选即修改 pi 当前会话对模型可见的工具集合，保存立即生效；不影响下一次新会话的默认值。</div>
+      <div style="overflow:auto"><table id="tools-table">
+        <thead><tr><th style="width:36px"></th><th>工具</th><th>来源</th><th>暴露</th><th>描述</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h3>斜杠命令</h3>
+      <div style="overflow:auto"><table id="commands-table">
+        <thead><tr><th>命令</th><th>来源</th><th>描述</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h3>Provider 与模型</h3>
+      <div id="providers"></div>
+    </div>
+    <div class="card">
+      <h3>MCP 服务器</h3>
+      <div id="mcp"></div>
+    </div>
+    <div class="card">
+      <h3>磁盘上的扩展目录</h3>
+      <div id="disk"></div>
+    </div>
+    <div class="card">
+      <h3>设置（与扩展相关）</h3>
+      <pre class="code" id="settings-json">—</pre>
+    </div>
+  </section>
+
+  <!-- ===== 会话 ===== -->
+  <section id="tab-session" hidden>
+    <div class="card">
+      <h3>当前会话</h3>
+      <div class="kv" id="kv-cur-session"></div>
+    </div>
+    <div class="card">
+      <h3>最近条目</h3>
+      <div class="toolbar"><button class="btn primary" id="btn-session-refresh">刷新</button></div>
+      <div class="feed" id="session-recent"></div>
+    </div>
+    <div class="card">
+      <h3>历史会话（最近 100 个）</h3>
+      <div class="toolbar"><button class="btn" id="btn-sessions-refresh">加载历史会话</button></div>
+      <div style="overflow:auto"><table id="sessions-table" hidden>
+        <thead><tr><th>修改时间</th><th>文件</th><th>名称</th><th>消息数</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+<div id="modal-back">
+  <div class="modal">
+    <h3>需要访问令牌</h3>
+    <p>该 pi 进程管理界面启用了令牌鉴权（PI_WEB_TOKEN）。令牌保存在浏览器本地，仅随请求发送。</p>
+    <input type="text" id="token-input" placeholder="访问令牌" autocomplete="off">
+    <div class="row">
+      <button class="btn" id="token-cancel">取消</button>
+      <button class="btn primary" id="token-save">保存</button>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// ===== 状态 =====
+const state = {
+  token: localStorage.getItem("pi_web_token") || "",
+  since: 0,
+  tab: "overview",
+  logAuto: false,
+  timers: { status: null, activity: null, logs: null },
+};
+
+// ===== 基础设施 =====
+function toast(msg, cls) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "show " + (cls || "");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = ""; }, 3200);
+}
+function showError(msg) {
+  const bar = $("error-bar");
+  bar.textContent = "⚠ " + msg;
+  bar.style.display = "block";
+  clearTimeout(showError._t);
+  showError._t = setTimeout(() => { bar.style.display = "none"; }, 8000);
+}
+function showTokenModal() { $("modal-back").classList.add("show"); $("token-input").focus(); }
+$("token-save").onclick = () => {
+  state.token = $("token-input").value.trim();
+  localStorage.setItem("pi_web_token", state.token);
+  $("modal-back").classList.remove("show");
+  refreshAll();
+};
+$("token-cancel").onclick = () => $("modal-back").classList.remove("show");
+$("token-input").addEventListener("keydown", (e) => { if (e.key === "Enter") $("token-save").click(); });
+
+async function api(path, opts) {
+  const headers = Object.assign({}, (opts && opts.headers) || {});
+  if (state.token) headers["authorization"] = "Bearer " + state.token;
+  if (opts && opts.body) headers["content-type"] = "application/json";
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) { showTokenModal(); throw new Error("需要访问令牌"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+// ===== 格式化 =====
+const two = (n) => String(n).padStart(2, "0");
+function fmtTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+}
+function fmtDateTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + fmtTime(ms);
+}
+function fmtDur(sec) {
+  if (sec == null) return "—";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h > 0) return h + "h" + two(m) + "m";
+  if (m > 0) return m + "m" + two(s) + "s";
+  return s + "s";
+}
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0; while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + " " + units[i];
+}
+function kv(el, rows) {
+  el.innerHTML = "";
+  for (const [k, v] of rows) {
+    const kd = document.createElement("div"); kd.className = "k"; kd.textContent = k;
+    const vd = document.createElement("div"); vd.className = "v"; vd.textContent = v;
+    el.appendChild(kd); el.appendChild(vd);
+  }
+}
+function shorten(p, n) {
+  if (!p) return "—";
+  return p.length > n ? "…" + p.slice(-n + 1) : p;
+}
+
+// ===== Tab 切换 =====
+document.querySelectorAll("nav button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll("main section").forEach((s) => (s.hidden = true));
+    btn.classList.add("active");
+    state.tab = btn.dataset.tab;
+    $("tab-" + state.tab).hidden = false;
+    if (state.tab === "plugins") loadPlugins();
+    if (state.tab === "session") loadSession();
+  };
+});
+
+// ===== 概览 =====
+async function refreshStatus() {
+  let d;
+  try { d = await api("/api/status"); } catch (e) { showError("获取状态失败: " + e.message); return; }
+  const busy = d.agentBusy || !d.idle;
+  const bs = $("badge-state");
+  bs.className = "badge " + (d.agentBusy ? "busy" : busy ? "err" : "ok");
+  bs.innerHTML = "";
+  const b = document.createElement("b");
+  b.textContent = d.agentBusy ? "任务执行中" : (d.idle ? "空闲" : "未知状态");
+  bs.appendChild(document.createTextNode("状态 ")); bs.appendChild(b);
+  $("badge-model").innerHTML = "";
+  const bm = document.createElement("b"); bm.textContent = d.model ? (d.model.provider + "/" + d.model.id) : "—";
+  $("badge-model").appendChild(document.createTextNode("模型 ")); $("badge-model").appendChild(bm);
+  $("badge-pid").innerHTML = "";
+  const bp = document.createElement("b"); bp.textContent = d.pid;
+  $("badge-pid").appendChild(document.createTextNode("PID ")); $("badge-pid").appendChild(bp);
+  $("badge-uptime").innerHTML = "";
+  const bu = document.createElement("b"); bu.textContent = fmtDur(d.uptimeSec);
+  $("badge-uptime").appendChild(document.createTextNode("运行 ")); $("badge-uptime").appendChild(bu);
+
+  kv($("kv-process"), [
+    ["进程号", d.pid + "  (" + d.nodeVersion + ")"],
+    ["pi 版本", d.piVersion || "—"],
+    ["模式", String(d.mode || "—") + (d.hasUI ? "（有 UI）" : "")],
+    ["启动于", fmtDateTime(d.startedAtMs)],
+    ["内存 RSS", fmtBytes(d.rss)],
+    ["工作目录", d.cwd],
+  ]);
+  kv($("kv-session"), [
+    ["会话文件", shorten(d.session.file, 42)],
+    ["会话名称", d.session.name || "（未命名）"],
+    ["条目数", d.session.entries],
+    ["待发消息", d.pendingMessages == null ? "—" : (d.pendingMessages ? "有" : "无")],
+  ]);
+  kv($("kv-web"), [
+    ["地址", d.webserver.url || "未启动"],
+    ["监听", d.webserver.host + ":" + d.webserver.port],
+    ["令牌鉴权", d.webserver.tokenProtected ? "已启用" : "未启用"],
+    ["stdout 日志", fmtBytes(d.logs.stdout.size) + (d.logs.stdout.exists ? "" : "（不存在）")],
+    ["stderr 日志", fmtBytes(d.logs.stderr.size) + (d.logs.stderr.exists ? "" : "（不存在）")],
+  ]);
+  kv($("kv-stats"), [
+    ["本轮任务数", d.stats.agentRuns],
+    ["工具调用", d.stats.toolCalls + " 次 / 出错 " + d.stats.toolErrors + " 次"],
+    ["活动缓冲", d.stats.activity + " 条（上限 500）"],
+    ["活跃工具", d.activeTools == null ? "—" : d.activeTools + " 个"],
+    ["正在执行", d.runningTool ? d.runningTool.name : "—"],
+  ]);
+}
+
+const KINDS = {
+  session_start: ["🚀", "会话启动"], web_start: ["🌐", "服务启动"], web_stop: ["🌐", "服务停止"],
+  agent_start: ["▶", "任务开始"], agent_end: ["✔", "任务完成"], tool_start: ["🔧", "工具调用"],
+  tool_end: ["🔧", "工具结束"], message: ["💬", "回复"], compact: ["🗜", "上下文压缩"],
+  compact_failed: ["🗜", "压缩失败"], model_select: ["🤖", "切换模型"], action: ["🖱", "页面操作"],
+};
+async function pollActivity() {
+  let d;
+  try { d = await api("/api/activity?since=" + state.since + "&limit=200"); } catch (e) { return; }
+  if (d.lastSeq > state.since) state.since = d.lastSeq;
+  const feed = $("activity-feed");
+  for (const ev of d.events) {
+    const row = document.createElement("div");
+    row.className = "feed-item" + (ev.kind === "compact_failed" || (ev.kind === "tool_end" && ev.data && ev.data.ok === false) ? " err" : "");
+    const [icon, label] = KINDS[ev.kind] || ["•", ev.kind];
+    const t = document.createElement("span"); t.className = "t"; t.textContent = fmtTime(ev.ts);
+    const ic = document.createElement("span"); ic.className = "icon"; ic.textContent = icon;
+    const k = document.createElement("span"); k.className = "kind"; k.textContent = label;
+    const da = document.createElement("span"); da.className = "data";
+    if (ev.kind === "message" && ev.data) {
+      const bb = document.createElement("b"); bb.textContent = "助手";
+      da.appendChild(bb); da.appendChild(document.createTextNode("  " + ev.data.text));
+    } else if (ev.data && Object.keys(ev.data).length) {
+      da.textContent = JSON.stringify(ev.data);
+    } else {
+      da.textContent = ev.kind === "message" ? "" : "—";
+    }
+    row.append(t, ic, k, da);
+    feed.appendChild(row);
+  }
+  while (feed.children.length > 200) feed.removeChild(feed.firstChild);
+  if (d.events.length) feed.scrollTop = feed.scrollHeight;
+}
+
+// ===== 操作 =====
+$("btn-refresh").onclick = () => { refreshStatus(); pollActivity(); };
+$("btn-abort").onclick = async () => {
+  if (!confirm("确定中止当前正在执行的任务？")) return;
+  try { toast((await api("/api/abort", { method: "POST", body: "{}" })).message, "ok"); }
+  catch (e) { showError(e.message); }
+};
+$("btn-compact").onclick = async () => {
+  if (!confirm("确定请求压缩当前会话上下文？通常在空闲时执行。")) return;
+  try { toast((await api("/api/compact", { method: "POST", body: "{}" })).message, "ok"); }
+  catch (e) { showError(e.message); }
+};
+$("btn-shutdown").onclick = async () => {
+  if (!confirm("将停止整个 pi RPC 进程，飞书等客户端会断开。确定继续？")) return;
+  if (!confirm("再次确认：真的要停止 pi 进程吗？")) return;
+  try { toast((await api("/api/shutdown", { method: "POST", body: "{}" })).message, "ok"); }
+  catch (e) { showError(e.message); }
+};
+
+// ===== 日志 =====
+async function loadLogs() {
+  const name = $("log-name").value;
+  const lines = $("log-lines").value;
+  let d;
+  try { d = await api("/api/logs?name=" + name + "&lines=" + lines); } catch (e) { showError(e.message); return; }
+  const filter = $("log-filter").value;
+  const view = $("log-view");
+  view.textContent = "";
+  const shown = filter ? d.lines.filter((l) => l.includes(filter)) : d.lines;
+  const frag = document.createDocumentFragment();
+  for (const line of shown.slice(-3000)) {
+    const ln = document.createElement("span");
+    ln.textContent = line + "\n";
+    frag.appendChild(ln);
+  }
+  view.appendChild(frag);
+  view.scrollTop = view.scrollHeight;
+  const atBottom = true;
+  $("log-meta").textContent =
+    (d.file || "") + " · " + fmtBytes(d.size) + " · " + (d.mtimeMs ? fmtDateTime(d.mtimeMs) : "—") +
+    (d.truncated ? " ·（已截断，仅显示末尾）" : "") +
+    " · 共 " + d.lines.length + " 行" + (filter ? "，过滤后 " + shown.length + " 行" : "");
+  $("log-download").href = "/api/logs/download?name=" + name + (state.token ? "&token=" + encodeURIComponent(state.token) : "");
+  $("log-download").textContent = "下载完整日志（" + (name === "stdout" ? "stdout" : "stderr") + "）";
+}
+$("btn-log-refresh").onclick = loadLogs;
+$("log-name").onchange = loadLogs;
+$("log-filter").addEventListener("input", () => {
+  clearTimeout(loadLogs._t);
+  loadLogs._t = setTimeout(loadLogs, 300);
+});
+$("log-auto").onchange = (e) => {
+  state.logAuto = e.target.checked;
+  if (state.timers.logs) { clearInterval(state.timers.logs); state.timers.logs = null; }
+  if (state.logAuto) { state.timers.logs = setInterval(() => { if (state.tab === "logs") loadLogs(); }, 5000); }
+};
+
+// ===== 插件与工具 =====
+let pluginsLoaded = false;
+async function loadPlugins() {
+  try {
+    const [t, c, p] = await Promise.all([api("/api/tools"), api("/api/commands"), api("/api/plugins")]);
+    renderTools(t); renderCommands(c); renderPlugins(p);
+    pluginsLoaded = true;
+  } catch (e) { showError(e.message); }
+}
+function renderTools(d) {
+  const tb = $("tools-table").querySelector("tbody");
+  tb.innerHTML = "";
+  $("tools-count").textContent = "共 " + d.tools.length + " 个，活跃 " + d.active.length + " 个";
+  for (const t of d.tools) {
+    const tr = document.createElement("tr");
+    const ckd = document.createElement("td");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = t.active; cb.dataset.name = t.name;
+    ckd.appendChild(cb);
+    const nm = document.createElement("td"); nm.className = "mono"; nm.textContent = t.name;
+    const sc = document.createElement("td"); sc.className = "mono muted"; sc.textContent = t.source;
+    const ex = document.createElement("td");
+    const pill = document.createElement("span"); pill.className = "pill" + (t.exposure === "always" ? " on" : "");
+    pill.textContent = t.exposure || "—"; ex.appendChild(pill);
+    const de = document.createElement("td");
+    const span = document.createElement("span"); span.className = "desc";
+    span.textContent = t.description || "（无描述）";
+    de.appendChild(span);
+    tr.append(ckd, nm, sc, ex, de);
+    tb.appendChild(tr);
+  }
+}
+$("btn-tools-save").onclick = async () => {
+  const names = [...document.querySelectorAll("#tools-table input[type=checkbox]")]
+    .filter((cb) => cb.checked).map((cb) => cb.dataset.name);
+  if (!names.length) { toast("至少需要保留一个工具", "err"); return; }
+  try {
+    await api("/api/tools/active", { method: "POST", body: JSON.stringify({ names }) });
+    toast("已保存，活跃工具 " + names.length + " 个", "ok");
+    loadPlugins();
+  } catch (e) { showError(e.message); }
+};
+$("btn-tools-refresh").onclick = loadPlugins;
+function renderCommands(d) {
+  const tb = $("commands-table").querySelector("tbody");
+  tb.innerHTML = "";
+  if (!d.ok) { tb.innerHTML = ""; const tr = tb.insertRow(); const td = tr.insertCell(); td.textContent = d.error || "无法加载"; return; }
+  for (const c of d.commands) {
+    const tr = document.createElement("tr");
+    const nm = document.createElement("td"); nm.className = "mono"; nm.textContent = "/" + c.name;
+    const sc = document.createElement("td"); sc.className = "mono muted"; sc.textContent = c.source;
+    const de = document.createElement("td"); de.textContent = c.description || "—";
+    tr.append(nm, sc, de);
+    tb.appendChild(tr);
+  }
+}
+function renderPlugins(p) {
+  const provs = $("providers"); provs.innerHTML = "";
+  if (!p.providers.length) provs.textContent = "（无可用 provider）";
+  for (const prov of p.providers) {
+    const card = document.createElement("div"); card.style.marginBottom = "10px";
+    const h = document.createElement("div");
+    const bb = document.createElement("b"); bb.textContent = prov.id;
+    const cnt = document.createElement("span"); cnt.className = "muted small"; cnt.textContent = "  · " + prov.count + " 个模型";
+    h.append(bb, cnt); card.appendChild(h);
+    for (const m of prov.models) {
+      const chip = document.createElement("span"); chip.className = "chip";
+      chip.textContent = m.id;
+      if (m.contextWindow) {
+        const sm = document.createElement("small");
+        sm.textContent = " " + Math.round(m.contextWindow / 1000) + "k";
+        chip.appendChild(sm);
+      }
+      card.appendChild(chip);
+    }
+    provs.appendChild(card);
+  }
+  const mcp = $("mcp"); mcp.innerHTML = "";
+  if (!p.mcpServers.length) { mcp.textContent = "（未注册 MCP 服务器）"; }
+  for (const s of p.mcpServers) {
+    const det = document.createElement("details");
+    const sum = document.createElement("summary");
+    sum.textContent = s.name + (s.extensionPath ? "（来自 " + shorten(s.extensionPath, 46) + "）" : "");
+    det.appendChild(sum);
+    const pre = document.createElement("pre"); pre.className = "code";
+    pre.textContent = JSON.stringify(s.config, null, 2);
+    det.appendChild(pre);
+    mcp.appendChild(det);
+  }
+  const disk = $("disk"); disk.innerHTML = "";
+  for (const d of p.disk) {
+    const h = document.createElement("div"); h.style.margin = "8px 0 4px";
+    const bb = document.createElement("b");
+    bb.textContent = (d.scope === "project" ? "项目扩展" : "用户扩展") + " · ";
+    const code = document.createElement("span"); code.className = "mono muted small"; code.textContent = d.dir;
+    h.append(bb, code); disk.appendChild(h);
+    if (!d.exists) { const m = document.createElement("div"); m.className = "muted small"; m.textContent = "（目录不存在）"; disk.appendChild(m); continue; }
+    for (const e of d.entries) {
+      const chip = document.createElement("span"); chip.className = "chip";
+      chip.textContent = e.name;
+      const sm = document.createElement("small"); sm.textContent = " " + e.kindDetail;
+      chip.appendChild(sm);
+      disk.appendChild(chip);
+    }
+  }
+  $("settings-json").textContent = p.settings ? JSON.stringify(p.settings, null, 2) : "（无相关设置）";
+}
+
+// ===== 会话 =====
+let sessionLoaded = false;
+async function loadSession() {
+  try {
+    const d = await api("/api/session");
+    kv($("kv-cur-session"), [
+      ["文件", d.file || "—"],
+      ["名称", d.name || "（未命名）"],
+      ["会话 ID", d.id || "—"],
+      ["存储目录", d.dir || "—"],
+      ["条目总数", d.count],
+    ]);
+    const feed = $("session-recent"); feed.innerHTML = "";
+    for (const e of d.recent.slice().reverse()) {
+      const row = document.createElement("div"); row.className = "feed-item";
+      const t = document.createElement("span"); t.className = "t"; t.textContent = fmtTime(e.ts);
+      const k = document.createElement("span"); k.className = "kind"; k.textContent = e.role || e.type;
+      const da = document.createElement("span"); da.className = "data"; da.textContent = e.preview || "";
+      row.append(t, k, da);
+      feed.appendChild(row);
+    }
+    sessionLoaded = true;
+  } catch (e) { showError(e.message); }
+}
+$("btn-session-refresh").onclick = loadSession;
+$("btn-sessions-refresh").onclick = async () => {
+  let d;
+  try { d = await api("/api/sessions"); } catch (e) { showError(e.message); return; }
+  const table = $("sessions-table");
+  const tb = table.querySelector("tbody"); tb.innerHTML = "";
+  table.hidden = false;
+  if (!d.ok) { showError(d.error); return; }
+  for (const s of d.sessions) {
+    const tr = document.createElement("tr");
+    const mt = document.createElement("td"); mt.className = "mono"; mt.textContent = fmtDateTime(s.modified);
+    const fl = document.createElement("td"); fl.className = "mono"; fl.textContent = shorten(s.file, 44);
+    const nm = document.createElement("td"); nm.textContent = s.name || "—";
+    const mc = document.createElement("td"); mc.className = "mono"; mc.textContent = s.messageCount == null ? "—" : s.messageCount;
+    tr.append(mt, fl, nm, mc);
+    tb.appendChild(tr);
+  }
+};
+
+// ===== 轮询与初始化 =====
+function refreshAll() {
+  refreshStatus();
+  pollActivity();
+  if (state.tab === "plugins") loadPlugins();
+  if (state.tab === "session") loadSession();
+  if (state.tab === "logs") loadLogs();
+}
+function startTimers() {
+  if (state.timers.status) clearInterval(state.timers.status);
+  if (state.timers.activity) clearInterval(state.timers.activity);
+  state.timers.status = setInterval(refreshStatus, 5000);
+  state.timers.activity = setInterval(pollActivity, 2500);
+}
+startTimers();
+refreshStatus();
+pollActivity();
+</script>
+</body>
+</html>

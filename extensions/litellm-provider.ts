@@ -70,7 +70,8 @@ export default async function(pi: ExtensionAPI) {
       if (!ok) console.warn(`设置默认模型 ${CONFIG.providerId}/${CONFIG.defaultModelId} 失败`);
     });
 
-    console.log(`自定义 ${CONFIG.providerId} provider 注册完成`);
+    // 必须走 stderr：RPC 模式下 stdout 是严格 JSONL 协议流，console.log 会污染协议
+    console.error(`自定义 ${CONFIG.providerId} provider 注册完成`);
   } catch (error) {
     console.error(`自定义 ${CONFIG.providerId} provider 注册失败:`, error);
     throw error;

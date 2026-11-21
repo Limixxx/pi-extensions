@@ -23,14 +23,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 ```
 
-运行状态在 `sessions/`：`pi-rpc.pid`（进程号）、`pi-rpc.info`（启动信息）、`pi-rpc.fifo`（命令入口）、`pi-rpc.log`（stdout 协议记录）、`pi-rpc.err.log`（stderr 诊断）。这些文件已被忽略，不入库。
+运行状态在 `sessions/`：`pi-rpc.pid`（进程号）、`pi-rpc.info`（启动信息）、`pi-rpc.fifo`（命令入口）、`pi-rpc.log`（stdout 协议记录）、`pi-rpc.err.log`（stderr 诊断）、`pi-web.info`（Web 管理界面地址）。这些文件已被忽略，不入库。
 
 ## 目录结构
 
 ```text
 .pi/
 ├── scripts/           init / start / stop 的 sh 与 ps1 版本
-├── extensions/        litellm-provider.ts / kubectl.ts / kubectl.tools / gh_tools.ts
+├── extensions/        litellm-provider.ts / kubectl.ts / kubectl.tools / gh_tools.ts / webserver/
 ├── sessions/          运行时 pid、日志、FIFO（仅 .keep 入库）
 ├── .env / .env.example 凭证与网关配置（.env 不入库）
 └── AGENT.md           面向 agent 的详细约定
@@ -39,6 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 - `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）。
 - `extensions/kubectl.ts` + `kubectl.tools`：注册 `kubectl` 工具，按白名单前缀匹配，未列出的子命令默认拒绝，白名单改完立即生效。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具，封装本机 `gh` CLI。
+- `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文。
 
 ## 环境变量
 
@@ -46,11 +47,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 
 | 变量 | 说明 |
 | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 使用） |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-channels 使用） |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址 |
 | `LITELLM_API_KEY` | 网关密钥，缺失时 `maas` provider 注册失败 |
 | `LITELLM_DEFAULT_MODEL` | 新建会话默认模型 |
 | `KUBECTL_TOOLS_FILE` | 覆盖 kubectl 白名单路径（可选） |
+| `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用（可选） |
+| `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170`（可选） |
+| `PI_WEB_TOKEN` | Web 管理界面访问令牌，设置后 `/api` 接口需携带 Bearer Token（可选） |
+| `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖，默认从 `pi-rpc.info` 读取（可选） |
 
 ## RPC 模式
 
@@ -75,7 +80,42 @@ $client.Dispose()
 
 `stop.ps1` 先结束 keeper，使 pi 读到 stdin EOF 后有序退出，等待超时再用 `taskkill /T /F` 兜底。
 
-## pi-feishu 扩展
+## 进程管理 Web UI
+
+`extensions/webserver/` 在 RPC 模式下自动启动一个 HTTP 服务（默认 `http://127.0.0.1:3170/`），用于在浏览器中管理当前 pi 进程：
+
+- **概览**：进程/模型/会话状态、启动时长、内存、工具调用统计、最近活动事件（任务开始、工具调用、回复、压缩等）。
+- **日志**：实时查看与下载 `pi-rpc.log`（stdout JSONL）与 `pi-rpc.err.log`（stderr），支持末尾行数选择、关键字过滤、5 秒自动刷新。
+- **插件与工具**：查看并勾选修改活跃工具集（对模型声明的工具）、斜杠命令、provider 与模型列表、MCP 服务器、磁盘扩展目录与设置；保存立即生效。
+- **会话**：当前会话信息与最近条目，列出最近 100 个历史会话。
+- **操作**：中止当前任务、压缩会话上下文、停止 pi 进程（需双重确认）。
+
+`start.sh` / `start.ps1` 启动完成后会读取 `sessions/pi-web.info` 并打印访问地址。安全说明：默认只监听 `127.0.0.1`，本机访问无需令牌；如需远程访问，设置 `PI_WEB_HOST=0.0.0.0` 并务必同时设置 `PI_WEB_TOKEN`。静态页面不鉴权，所有 `/api` 数据接口需携带令牌。扩展日志全部走 stderr，不会污染 RPC stdout 协议。
+
+接口清单：`GET /api/health|status|activity|logs|logs/download|tools|commands|plugins|session|sessions`，`POST /api/tools/active|abort|compact|shutdown`，返回 JSON。
+
+
+## 其他组件
+
+### pi-app-server
+
+```bash
+pi install npm:pi-app-server
+npx pi-server serve --port 3141 --provider maas --model GLM-5.3
+npx pi-server serve --port 3141
+PI_VERSION=$(cat /root/.pi/agent/install/current-version)
+npx pi-server serve --port 3141 --pi-cli-path ~/.pi/agent/install/releases/1.5.2/node_modules/@earendil-workspce/pi-coding-agent/dist/bundle/cli.js
+```
+
+### pi-channels
+
+已集成到 pi 框架中，通过 `settings.json` 配置。
+
+```bash
+pi install npm:@amaster.ai/pi-channels
+```
+
+### pi-feishu
 
 ```bash
 pi install npm:pi-feishu

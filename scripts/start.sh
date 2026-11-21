@@ -13,6 +13,7 @@ INFO_FILE="$SESS_DIR/pi-rpc.info"
 FIFO_FILE="$SESS_DIR/pi-rpc.fifo"
 LOG_FILE="$SESS_DIR/pi-rpc.log"
 ERR_FILE="$SESS_DIR/pi-rpc.err.log"
+WEB_INFO_FILE="$SESS_DIR/pi-web.info"
 
 log() { printf '[start] %s\n' "$*"; }
 die() { printf '[start] 错误: %s\n' "$*" >&2; exit 1; }
@@ -43,6 +44,8 @@ fi
 # 以读写方式打开 FIFO 作为 stdin，保证没有外部写入时也能常驻。
 rm -f "$FIFO_FILE"
 mkfifo "$FIFO_FILE"
+# 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）
+rm -f "$WEB_INFO_FILE"
 
 cd "$WORK_DIR"
 nohup pi --mode rpc --approve 0<>"$FIFO_FILE" >>"$LOG_FILE" 2>>"$ERR_FILE" &
@@ -74,3 +77,16 @@ log "输出日志: $LOG_FILE"
 log "错误日志: $ERR_FILE"
 log "进程信息: $INFO_FILE"
 log "停止: $SCRIPT_DIR/stop.sh"
+
+# 等待并显示进程管理 Web UI（由 extensions/webserver 在 RPC 模式自动启动）
+web_i=0
+while [ "$web_i" -lt 10 ]; do
+  [ -f "$WEB_INFO_FILE" ] && break
+  sleep 1
+  web_i=$((web_i + 1))
+done
+if [ -f "$WEB_INFO_FILE" ] && grep -q '^url=' "$WEB_INFO_FILE" 2>/dev/null; then
+  log "进程管理界面: $(sed -n 's/^url=//p' "$WEB_INFO_FILE" | head -n 1)"
+else
+  log "进程管理界面: 未启动（可用 PI_WEB_ENABLED/PI_WEB_PORT 控制，见 .env.example）"
+fi
