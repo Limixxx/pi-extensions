@@ -7,12 +7,12 @@
 - `scripts/init.sh`：安装/更新 pi 与 `npm:pi-feishu` 扩展。
 - `scripts/start.sh`：以 RPC 模式后台启动 pi，pid、日志与启动信息写入 `sessions/`。
 - `scripts/stop.sh`：停止 `start.sh` 启动的 pi 进程。
-- `scripts/init.ps1` / `start.ps1` / `stop.ps1`：上面三个脚本的 Windows PowerShell 版本，行为一致；`start.ps1` 用 keeper 进程持有 pi 的 stdin，命令入口是命名管道 `\\.\pipe\pi-rpc-<hash>`（名字见 `pi-rpc.info` 的 `pipe=`）。
+- `scripts/init.ps1` / `start.ps1` / `stop.ps1`：上面三个脚本的 Windows PowerShell 版本，行为一致；`start.ps1` 用 keeper 进程持有 pi 的 stdin，命令入口是命名管道 `\\.\pipe\pi-rpc-<hash>`（名字见 `pi-rpc.info` 的 `pipe=`），`pi-rpc.pid` 记录的是 keeper 的 pid，pi 本身的 pid 在 `pi-rpc.info` 的 `pi_pid=`。
 - `extensions/litellm-provider.ts`：向 pi 注册 `maas` provider，模型列表来自 `LITELLM_BASE_URL/models`，默认模型为 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）。未设置 `LITELLM_API_KEY` 时插件不启用（跳过注册，不抛错）。
-- `extensions/kubectl.ts`：注册 `kubectl` 工具，按 `kubectl.tools` 白名单前缀匹配，未列出的子命令默认拒绝。
+- `extensions/kubectl.ts`：注册 `kubectl` 工具，按 `kubectl.tools` 白名单前缀匹配，未列出的子命令默认拒绝；`timeout` 参数默认 60s、上限 600s。另注册 `/kubectl` 斜杠命令（仅 TUI 模式）查看当前白名单。
 - `extensions/kubectl.tools`：kubectl 子命令白名单，每行一条、`#` 注释，每次调用重新读取，改完立即生效。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具（`gh_auth`、`gh_issue`、`gh_pr`、`gh_repo`、`gh_actions`、`gh_release`、`gh_api`、`gh_search`、`gh_secret`、`gh_variable`、`gh_label`、`gh_gist`、`gh_config`、`gh_key`、`gh_project`），封装本机 `gh` CLI。
-- `extensions/webserver/index.ts` + `public/index.html`：进程管理 Web UI。RPC 模式下自动启动 HTTP 服务（默认 `127.0.0.1:3170`，可用 `PI_WEB_*` 环境变量调整），提供状态/日志/插件/会话查询与中止、压缩、停进程等操作；地址写入 `sessions/pi-web.info`，`start.sh` / `start.ps1` 会读取并打印。无外部依赖，仅用 node 内置模块。详细文档见 [extensions/webserver/README.md](extensions/webserver/README.md)。
+- `extensions/webserver/index.ts` + `public/index.html`：进程管理 Web UI。RPC 模式下自动启动 HTTP 服务（默认 `127.0.0.1:3170`，可用 `PI_WEB_*` 环境变量调整），提供状态/日志/插件/会话查询与中止、压缩、停进程等操作；地址写入 `sessions/pi-web.info`，`start.sh` / `start.ps1` 会读取并打印；另注册 `/web` 斜杠命令显示管理界面地址。无外部依赖，仅用 node 内置模块。详细文档见 [extensions/webserver/README.md](extensions/webserver/README.md)。
 - `.env` / `.env.example`：凭证与网关配置模板。`.env` 已被忽略，禁止提交。
 - `sessions/`：运行时目录，存放 `pi-rpc.pid`、`pi-rpc.info`、`pi-rpc.log`、`pi-rpc.err.log`、`pi-web.info`（Linux 另有 `pi-rpc.fifo`；Windows 用命名管道，不落盘）；只保留 `.keep` 入库。
 
@@ -49,7 +49,8 @@ stdout 是严格 JSONL 协议记录（写入 `pi-rpc.log`），stderr 是诊断�
 | `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用 | 可选 |
 | `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170` | 可选 |
 | `PI_WEB_TOKEN` | Web 管理界面访问令牌（Bearer），设置后 `/api` 接口需携带 | 可选 |
-| `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖，默认从 `pi-rpc.info` 的 `stdout_log`/`stderr_log` 读取 | 可选 |
+| `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖；不设置时按约定路径 `sessions/pi-rpc.log` / `pi-rpc.err.log` 定位 | 可选 |
+| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束（SIGKILL / `taskkill /T /F`），默认 15 | 可选 |
 
 `.env` 使用 shell `export` 语法，脚本通过 `set -a; . .env` 加载；手工启动时同样需要先 dot-source。
 
@@ -62,5 +63,5 @@ stdout 是严格 JSONL 协议记录（写入 `pi-rpc.log`），stderr 是诊断�
 - 扩展通过 `pi.registerTool` / `pi.registerCommand` / `pi.registerProvider` 注册，全部使用 `// @ts-ignore` 引入类型，仓库不维护构建流程，直接以 `.ts` 交付。
 - 扩展日志只能用 `console.error`（见上文 stdout 纯净性要求）；扩展内部任何异常都要自行捕获并降级为日志，不允许把异常抛到 pi 主进程导致退出（历史事故：飞书 API 400 未捕获致进程崩溃）。
 - `webserver/` 修改后同步检查：`index.ts`（服务与接口）与 `public/index.html`（页面）行为一致、sh 与 ps1 启动脚本均能读到 `pi-web.info`、新增接口在 [extensions/webserver/README.md](extensions/webserver/README.md) 的接口清单中登记。
-- 脚本面向 Linux/bash（devcontainer 内以 `ubuntu` 用户运行），保持 `#!/usr/bin/env bash` 与 `set -euo pipefail`。仓库当前未记录可执行位，检出后用 `chmod +x scripts/*.sh` 或 `bash scripts/xxx.sh` 调用。
+- 脚本面向 Linux/bash（devcontainer 内以 `ubuntu` 用户运行），保持 `#!/usr/bin/env bash` 与 `set -euo pipefail`。`.sh` 脚本已在仓库记录可执行位（100755），检出后可直接执行；ps1 由 `powershell -File` 调用，不依赖可执行位。旧检出如缺执行权限，用 `chmod +x scripts/*.sh` 补齐。
 - PowerShell 脚本保存为 UTF-8 **带 BOM**（Windows PowerShell 5.1 按 ANSI 解析无 BOM 文件，中文会乱码）；变量名不区分大小写，`param([switch]$Keeper)` 与局部变量 `$keeper` 会冲突，改用 `$keeperProc` 这类名字。

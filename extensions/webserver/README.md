@@ -30,6 +30,10 @@ webserver/
 - 端口被占用（`EADDRINUSE`）时输出警告并放弃启动，扩展本身不报错；可用 `PI_WEB_PORT` 换端口。
 - `session_shutdown` 时**同步**关闭服务并删除 `pi-web.info`（退出路径不等待异步任务，因此不能用异步关闭）。
 
+## 斜杠命令
+
+扩展注册 `/web` 命令：显示当前管理界面地址；服务未启动时显示原因（当前不在 RPC 模式，或已设置 `PI_WEB_ENABLED=0`）。地址通过 `ui.notify` 通知，仅在带 UI 的模式（如 TUI）可见。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -43,8 +47,10 @@ webserver/
 日志文件定位顺序（`resolveLogPaths`，stdout/stderr 各自独立取值）：
 
 1. `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` 覆盖值；
-2. `<cwd>/.pi/sessions/pi-rpc.info` 中的 `log=` / `errLog=` 字段（`start.sh` 写入）；
+2. `<cwd>/.pi/sessions/pi-rpc.info` 中的 `log=` / `errLog=` 字段；
 3. 约定路径 `<cwd>/.pi/sessions/pi-rpc.log` / `pi-rpc.err.log`。
+
+注意：当前 `start.sh` / `start.ps1` 写入 `pi-rpc.info` 的是 `stdout_log=` / `stderr_log=` 字段，与第 2 步的键名不匹配，实际通常命中第 3 步约定路径——与启动脚本写入的路径一致，行为正确。调整任一侧字段名时，需同步另一侧与本说明。
 
 ## 功能页面
 

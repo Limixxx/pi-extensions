@@ -6,7 +6,6 @@
 
 ```bash
 cd .pi
-chmod +x scripts/*.sh      # 仓库未记录可执行位，首次检出后执行
 cp .env.example .env       # 填写飞书凭证与 MaaS 网关配置
 
 scripts/init.sh            # 安装 pi、npm:pi-feishu，并更新扩展
@@ -23,7 +22,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 ```
 
-运行状态在 `sessions/`：`pi-rpc.pid`（进程号）、`pi-rpc.info`（启动信息）、`pi-rpc.fifo`（命令入口）、`pi-rpc.log`（stdout 协议记录）、`pi-rpc.err.log`（stderr 诊断）、`pi-web.info`（Web 管理界面地址）。这些文件已被忽略，不入库。
+运行状态在 `sessions/`：`pi-rpc.pid`（Linux 为 pi 进程号；Windows 为 keeper 进程号，pi 进程号见 `pi-rpc.info` 的 `pi_pid=`）、`pi-rpc.info`（启动信息）、`pi-rpc.fifo`（Linux 命令入口）、`pi-rpc.log`（stdout 协议记录）、`pi-rpc.err.log`（stderr 诊断）、`pi-web.info`（Web 管理界面地址；Windows 命令入口为命名管道，不落盘）。这些文件已被忽略，不入库。
 
 ## 目录结构
 
@@ -37,9 +36,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 ```
 
 - `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）；未设置 `LITELLM_API_KEY` 时不启用该插件。
-- `extensions/kubectl.ts` + `kubectl.tools`：注册 `kubectl` 工具，按白名单前缀匹配，未列出的子命令默认拒绝，白名单改完立即生效。
+- `extensions/kubectl.ts` + `kubectl.tools`：注册 `kubectl` 工具，按白名单前缀匹配，未列出的子命令默认拒绝，白名单改完立即生效；另注册 `/kubectl` 斜杠命令（TUI 模式）查看当前白名单。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具，封装本机 `gh` CLI。
-- `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文与 [extensions/webserver/README.md](extensions/webserver/README.md)。
+- `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文与 [extensions/webserver/README.md](extensions/webserver/README.md)；另注册 `/web` 斜杠命令显示管理界面地址。
 
 ## 环境变量
 
@@ -55,7 +54,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 | `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用（可选） |
 | `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170`（可选） |
 | `PI_WEB_TOKEN` | Web 管理界面访问令牌，设置后 `/api` 接口需携带 Bearer Token（可选） |
-| `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖，默认从 `pi-rpc.info` 读取（可选） |
+| `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖，默认按 `sessions/pi-rpc.log` / `pi-rpc.err.log` 约定路径定位（可选） |
+| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束，默认 15（可选） |
 
 ## RPC 模式
 
@@ -90,7 +90,7 @@ $client.Dispose()
 - **会话**：当前会话信息与最近条目，列出最近 100 个历史会话。
 - **操作**：中止当前任务、压缩会话上下文、停止 pi 进程（需双重确认）。
 
-`start.sh` / `start.ps1` 启动完成后会读取 `sessions/pi-web.info` 并打印访问地址。安全说明：默认只监听 `127.0.0.1`，本机访问无需令牌；如需远程访问，设置 `PI_WEB_HOST=0.0.0.0` 并务必同时设置 `PI_WEB_TOKEN`。静态页面不鉴权，所有 `/api` 数据接口需携带令牌。扩展日志全部走 stderr，不会污染 RPC stdout 协议。
+`start.sh` / `start.ps1` 启动完成后会读取 `sessions/pi-web.info` 并打印访问地址；pi 会话内也可用 `/web` 斜杠命令随时查看。安全说明：默认只监听 `127.0.0.1`，本机访问无需令牌；如需远程访问，设置 `PI_WEB_HOST=0.0.0.0` 并务必同时设置 `PI_WEB_TOKEN`。静态页面不鉴权，所有 `/api` 数据接口需携带令牌。扩展日志全部走 stderr，不会污染 RPC stdout 协议。
 
 接口清单、`pi-web.info` 文件格式与实现细节见 [extensions/webserver/README.md](extensions/webserver/README.md)。
 
