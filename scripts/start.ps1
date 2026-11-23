@@ -1,11 +1,14 @@
-﻿<#
+<#
 .SYNOPSIS
-  后台启动 pi RPC 服务：pi --mode rpc
+  后台启动 pi RPC 服务（默认经 sidecar 守护进程托管）
 .DESCRIPTION
   start.sh 的 Windows PowerShell 版本。pid、启动信息与日志写入 .pi/sessions/。
-  Windows 没有 FIFO，stdin 由 keeper 进程通过命名管道 pi-rpc-<hash> 提供：
-  keeper 持有 pi 的 stdin，客户端连接该命名管道即可逐行下发 JSON 命令。
-  保持 pi 存活的是 keeper，因此不要手工结束 keeper 之外的进程。
+
+  PI_SIDECAR_ENABLED≠0（默认）：拉起 extensions/sidecar/sidecar.mjs 守护进程。
+  Windows 无 FIFO，pi 的 stdin 由 sidecar 持有并通过命名管道
+  pi-rpc-<sha1(workdir)[:6]> 转发命令；pi 崩溃由 sidecar 自动重启。
+
+  PI_SIDECAR_ENABLED=0：跳过 sidecar，走旧版 keeper 直启流程。
 #>
 [CmdletBinding()]
 param(
@@ -23,12 +26,18 @@ $InfoFile  = Join-Path $SessDir 'pi-rpc.info'
 $LogFile   = Join-Path $SessDir 'pi-rpc.log'
 $ErrFile   = Join-Path $SessDir 'pi-rpc.err.log'
 $WebInfoFile = Join-Path $SessDir 'pi-web.info'
+$SidecarEntry   = Join-Path $PiDir 'extensions\sidecar\sidecar.mjs'
+$SidecarPidFile = Join-Path $SessDir 'pi-sidecar.pid'
+$SidecarInfoFile = Join-Path $SessDir 'pi-sidecar.info'
+$SidecarLogFile = Join-Path $SessDir 'pi-sidecar.log'
+$SidecarOutLogFile = Join-Path $SessDir 'pi-sidecar.out.log'
+$SidecarStopFile = Join-Path $SessDir 'pi-sidecar.stop'
 
 # 命名管道按工作目录区分，避免多项目互相冲突
 $sha = [System.Security.Cryptography.SHA1]::Create()
 $digest = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($WorkDir.ToLowerInvariant()))
 $sha.Dispose()
-$PipeName = 'pi-rpc-' + (-join ($digest[0..5] | ForEach-Object { $_.ToString('x2') }))
+$PipeName = 'pi-rpc-' + (-join ($digest[0..5] | ForEach-Object { $_.ToString('x2') } ))
 
 function Write-Log {
     param([string]$Message)
@@ -57,8 +66,29 @@ function Import-DotEnv {
     }
 }
 
+function Read-PidFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    $parsed = 0
+    [void][int]::TryParse((Get-Content -LiteralPath $Path -TotalCount 1), [ref]$parsed)
+    return $parsed
+}
+
+function Wait-WebInfo {
+    $webDeadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $webDeadline) {
+        if (Test-Path -LiteralPath $WebInfoFile) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (Test-Path -LiteralPath $WebInfoFile) {
+        $webUrl = (Get-Content -LiteralPath $WebInfoFile | Where-Object { $_ -match '^url=' }) -replace '^url=', ''
+        if ($webUrl) { Write-Log "进程管理界面: $webUrl"; return }
+    }
+    Write-Log '进程管理界面: 未启动（可用 PI_WEB_ENABLED/PI_WEB_PORT 控制，见 .env.example）'
+}
+
 # ──────────────────────────────────────────────────────────
-# keeper：持有 pi 的 stdin，转发命名管道命令，输出写入日志
+# keeper：旧版直启模式的 stdin 持有进程（PI_SIDECAR_ENABLED=0 时使用）
 # ──────────────────────────────────────────────────────────
 if ($Keeper) {
     try {
@@ -138,10 +168,96 @@ if ($Keeper) {
 # ──────────────────────────────────────────────────────────
 New-Item -ItemType Directory -Force -Path $SessDir | Out-Null
 
-# 已在运行则直接返回
+$SidecarEnabled = 1
+if ($env:PI_SIDECAR_ENABLED) {
+    switch -Regex ($env:PI_SIDECAR_ENABLED.ToLowerInvariant()) {
+        '^(0|false|no|off)$' { $SidecarEnabled = 0 }
+    }
+}
+
+if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+    Write-Fail "未找到 pi，请先执行 $(Join-Path $ScriptDir 'init.ps1')"
+}
+
+Import-DotEnv (Join-Path $PiDir '.env')
+
+# 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）
+Remove-Item -LiteralPath $WebInfoFile -Force -ErrorAction SilentlyContinue
+
+# ── sidecar 托管模式 ───────────────────────────────────────
+if ($SidecarEnabled -eq 1) {
+    $oldSidecarPid = Read-PidFile $SidecarPidFile
+    if ($oldSidecarPid -gt 0 -and (Get-Process -Id $oldSidecarPid -ErrorAction SilentlyContinue)) {
+        Write-Log "sidecar 已在运行 (pid $oldSidecarPid)，无需重复启动"
+        exit 0
+    }
+    Remove-Item -LiteralPath $SidecarPidFile -Force -ErrorAction SilentlyContinue
+
+    # pi 已由旧版脚本直接启动时 sidecar 会自行拒绝接管，这里提前给出提示
+    $oldPid = Read-PidFile $PidFile
+    if ($oldPid -gt 0 -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+        Write-Fail "pi 已在运行 (pid $oldPid，可能由旧版脚本直接启动)。请先执行 $(Join-Path $ScriptDir 'stop.ps1') 再切换到 sidecar 托管"
+    }
+
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Fail '未找到 node，sidecar 守护依赖 node（或设置 PI_SIDECAR_ENABLED=0 回退直启）'
+    }
+
+    Remove-Item -LiteralPath $SidecarStopFile -Force -ErrorAction SilentlyContinue
+    Write-Log '启动 sidecar 守护进程（配置见 .env.example 的 PI_SIDECAR_* 说明）...'
+    $sidecarProc = Start-Process -FilePath 'node' -ArgumentList "`"$SidecarEntry`"" `
+        -WorkingDirectory $WorkDir -WindowStyle Hidden `
+        -RedirectStandardOutput $SidecarOutLogFile -RedirectStandardError $SidecarLogFile -PassThru
+    Set-Content -LiteralPath $SidecarPidFile -Value $sidecarProc.Id -Encoding ASCII
+
+    Start-Sleep -Seconds 2
+    if ($sidecarProc.HasExited) {
+        Remove-Item -LiteralPath $SidecarPidFile -Force -ErrorAction SilentlyContinue
+        Write-Log 'sidecar 启动失败，最近的错误输出：'
+        if (Test-Path -LiteralPath $SidecarLogFile) {
+            Get-Content -LiteralPath $SidecarLogFile -Tail 20 | Write-Host
+        }
+        exit 1
+    }
+
+    Write-Log "sidecar 已启动 (pid $($sidecarProc.Id))，由其拉起并守护 pi RPC 子进程"
+    if (Test-Path -LiteralPath $SidecarInfoFile) {
+        foreach ($line in Get-Content -LiteralPath $SidecarInfoFile) {
+            switch -Regex ($line) {
+                '^mode='         { Write-Log ("运行模式: " + $line.Substring(5)) }
+                '^node_id='      { Write-Log ("节点 ID: " + $line.Substring(8)) }
+                '^registry_url=' { Write-Log ("注册中心: " + $line.Substring(13)) }
+                '^master_url='   { Write-Log ("master: " + $line.Substring(11)) }
+            }
+        }
+    }
+    Write-Log "sidecar 日志: $SidecarLogFile"
+    Write-Log '节点查询: pi_registry 工具（list/get/self）或 /sidecar 命令'
+    Write-Log "停止: $(Join-Path $ScriptDir 'stop.ps1')"
+
+    # 等待 sidecar 拉起 pi 子进程并写出 pid 文件
+    $rpcDeadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $rpcDeadline) {
+        if ((Test-Path -LiteralPath $PidFile) -or $sidecarProc.HasExited) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (Test-Path -LiteralPath $PidFile) {
+        Write-Log "pi RPC 子进程: pid $(Read-PidFile $PidFile)，进程信息: $InfoFile"
+    } else {
+        Write-Log "警告: 15s 内未见 pi 子进程 pid 文件，请检查 $SidecarLogFile"
+    }
+
+    Wait-WebInfo
+    exit 0
+}
+
+# ── 直启模式（PI_SIDECAR_ENABLED=0，旧版 keeper） ───────────
+if (-not (Get-Command 'pi.cmd' -ErrorAction SilentlyContinue)) {
+    Write-Fail '未找到 pi.cmd，后台 RPC 启动依赖 cmd 版启动垫片'
+}
+
 if (Test-Path -LiteralPath $PidFile) {
-    $oldPid = 0
-    [void][int]::TryParse((Get-Content -LiteralPath $PidFile -TotalCount 1), [ref]$oldPid)
+    $oldPid = Read-PidFile $PidFile
     if ($oldPid -gt 0 -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
         Write-Log "pi 已在运行 (pid $oldPid)，无需重复启动"
         exit 0
@@ -149,23 +265,12 @@ if (Test-Path -LiteralPath $PidFile) {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
-if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-    Write-Fail "未找到 pi，请先执行 $(Join-Path $ScriptDir 'init.ps1')"
-}
-if (-not (Get-Command 'pi.cmd' -ErrorAction SilentlyContinue)) {
-    Write-Fail '未找到 pi.cmd，后台 RPC 启动依赖 cmd 版启动垫片'
-}
-
-Import-DotEnv (Join-Path $PiDir '.env')
-
 $psExe = (Get-Process -Id $PID).Path
 if (-not $psExe -or $psExe -match 'ise\.exe$') {
     $psExe = Join-Path $PSHOME 'powershell.exe'
 }
 
 Remove-Item -LiteralPath $InfoFile -Force -ErrorAction SilentlyContinue
-# 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）
-Remove-Item -LiteralPath $WebInfoFile -Force -ErrorAction SilentlyContinue
 
 $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Keeper"
 $keeperInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -218,15 +323,4 @@ Write-Log "错误日志: $ErrFile"
 Write-Log "进程信息: $InfoFile"
 Write-Log "停止: $(Join-Path $ScriptDir 'stop.ps1')"
 
-# 等待并显示进程管理 Web UI（由 extensions/webserver 在 RPC 模式自动启动）
-$webDeadline = (Get-Date).AddSeconds(10)
-while ((Get-Date) -lt $webDeadline) {
-    if (Test-Path -LiteralPath $WebInfoFile) { break }
-    Start-Sleep -Milliseconds 500
-}
-if (Test-Path -LiteralPath $WebInfoFile) {
-    $webUrl = (Get-Content -LiteralPath $WebInfoFile | Where-Object { $_ -match '^url=' }) -replace '^url=', ''
-    if ($webUrl) { Write-Log "进程管理界面: $webUrl" }
-} else {
-    Write-Log '进程管理界面: 未启动（可用 PI_WEB_ENABLED/PI_WEB_PORT 控制，见 .env.example）'
-}
+Wait-WebInfo
