@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   后台启动 pi RPC 服务（默认经 sidecar 守护进程托管）
 .DESCRIPTION

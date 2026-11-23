@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   停止 start.ps1 启动的 pi RPC 服务。
 .DESCRIPTION
