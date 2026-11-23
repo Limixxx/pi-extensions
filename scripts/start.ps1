@@ -208,14 +208,14 @@ if ($SidecarEnabled -eq 1) {
     $sidecarProc = Start-Process -FilePath 'node' -ArgumentList "`"$SidecarEntry`"" `
         -WorkingDirectory $WorkDir -WindowStyle Hidden `
         -RedirectStandardOutput $SidecarOutLogFile -RedirectStandardError $SidecarLogFile -PassThru
-    Set-Content -LiteralPath $SidecarPidFile -Value $sidecarProc.Id -Encoding ASCII
+    # pid 文件由 sidecar 自身写入；此处提前写会让它的单实例检查读到自己的 pid 而误判退出
 
     Start-Sleep -Seconds 2
     if ($sidecarProc.HasExited) {
         Remove-Item -LiteralPath $SidecarPidFile -Force -ErrorAction SilentlyContinue
         Write-Log 'sidecar 启动失败，最近的错误输出：'
         if (Test-Path -LiteralPath $SidecarLogFile) {
-            Get-Content -LiteralPath $SidecarLogFile -Tail 20 | Write-Host
+            Get-Content -LiteralPath $SidecarLogFile -Tail 20 -Encoding UTF8 | Write-Host
         }
         exit 1
     }
@@ -293,7 +293,7 @@ function Show-StartupFailure {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     Write-Log '启动失败，最近的错误输出：'
     if (Test-Path -LiteralPath $ErrFile) {
-        Get-Content -LiteralPath $ErrFile -Tail 20 | Write-Host
+        Get-Content -LiteralPath $ErrFile -Tail 20 -Encoding UTF8 | Write-Host
     }
     exit 1
 }

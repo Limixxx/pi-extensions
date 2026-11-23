@@ -41,7 +41,7 @@ function readPidFile(p) {
     }
 }
 const staleSidecarPid = readPidFile(PATHS.sidecarPid);
-if (alive(staleSidecarPid)) {
+if (staleSidecarPid !== process.pid && alive(staleSidecarPid)) {
     log(`sidecar 已在运行 (pid ${staleSidecarPid})，退出`);
     process.exit(1);
 }

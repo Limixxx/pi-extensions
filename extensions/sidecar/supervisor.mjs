@@ -15,7 +15,7 @@ const RESET_AFTER_MS = 60_000; // 存活超过该时长后重置退避计数
 /** Windows 命名管道名：sha1(工作目录小写) 前 6 字节 hex，与 start.ps1 keeper 保持一致 */
 export function windowsPipeName() {
     const digest = crypto.createHash("sha1").update(WORK_DIR.toLowerCase()).digest();
-    return `pi-rpc-${Array.from(digest.slice(0, 6), (b) => b.toString("x2").padStart(2, "0")).join("")}`;
+    return `pi-rpc-${Array.from(digest.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
 export function startSupervisor({ onStarted, onExited } = {}) {
