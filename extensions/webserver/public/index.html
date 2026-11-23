@@ -122,6 +122,12 @@ details[open] summary { margin-bottom: 8px; }
 .modal p { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .modal input { width: 100%; margin-bottom: 14px; }
 .modal .row { display: flex; justify-content: flex-end; gap: 8px; }
+.modal.wide { width: 760px; }
+.modal textarea {
+  width: 100%; min-height: 120px; resize: vertical; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+  font: 13px/1.5 var(--mono); margin-bottom: 12px;
+}
 .actions { margin: 4px 0 16px; }
 .hint { font-size: 12px; color: var(--muted); margin: 6px 0 14px; }
 </style>
@@ -141,6 +147,7 @@ details[open] summary { margin-bottom: 8px; }
   <button data-tab="overview" class="active">概览</button>
   <button data-tab="logs">日志</button>
   <button data-tab="plugins">插件与工具</button>
+  <button data-tab="registry">注册中心</button>
   <button data-tab="session">会话</button>
 </nav>
 
@@ -159,6 +166,10 @@ details[open] summary { margin-bottom: 8px; }
       <div class="card">
         <h3>Web 服务</h3>
         <div class="kv" id="kv-web"></div>
+      </div>
+      <div class="card">
+        <h3>sidecar 与注册中心</h3>
+        <div class="kv" id="kv-sidecar"></div>
       </div>
       <div class="card">
         <h3>统计</h3>
@@ -247,6 +258,34 @@ details[open] summary { margin-bottom: 8px; }
     </div>
   </section>
 
+  <!-- ===== 注册中心 ===== -->
+  <section id="tab-registry" hidden>
+    <div class="card">
+      <h3>注册中心</h3>
+      <div class="toolbar">
+        <button class="btn primary" id="btn-registry-refresh">刷新</button>
+        <label><input type="checkbox" id="registry-auto"> 自动刷新（5s）</label>
+        <span class="hspace"></span>
+        <span class="muted small" id="registry-meta"></span>
+      </div>
+      <div class="kv" id="kv-registry"></div>
+    </div>
+    <div class="card">
+      <h3>已注册节点</h3>
+      <div style="overflow:auto"><table id="registry-table">
+        <thead><tr>
+          <th>节点</th><th>主机</th><th>模式</th><th>状态</th><th>pi pid</th>
+          <th>Web UI</th><th>RPC 入口</th><th>心跳</th><th>重启</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div class="hint">
+        数据来自 sidecar 注册中心（master 的 <code>/api/nodes</code>）；slave 节点由 <code>PI_SIDECAR_MASTER_URL</code> 定位，master 缺省用本机注册中心端口。
+        pi 重启后由心跳自动刷新地址；注册中心不可达时显示本地持久化快照并标记为过期。
+      </div>
+    </div>
+  </section>
+
   <!-- ===== 会话 ===== -->
   <section id="tab-session" hidden>
     <div class="card">
@@ -278,6 +317,27 @@ details[open] summary { margin-bottom: 8px; }
     <div class="row">
       <button class="btn" id="token-cancel">取消</button>
       <button class="btn primary" id="token-save">保存</button>
+    </div>
+  </div>
+</div>
+<div id="rpc-modal-back" class="modal-back-rpc" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:200; align-items:center; justify-content:center">
+  <div class="modal wide">
+    <h3>RPC 试问 · <span class="mono" id="rpc-node">—</span></h3>
+    <p>每次发送都会启动一个全新的 pi 会话（<code>--no-session</code>），不会影响当前会话与日志中的既有会话。</p>
+    <div class="kv" style="margin-bottom:12px">
+      <div class="k">RPC 入口</div><div class="v" id="rpc-path">—</div>
+    </div>
+    <textarea id="rpc-message" placeholder="输入要发送给该节点的消息，Ctrl+Enter 发送"></textarea>
+    <div class="toolbar">
+      <label>超时（秒）</label>
+      <input type="number" id="rpc-timeout" value="120" min="5" max="300" style="width:90px">
+      <span class="hspace"></span>
+      <span class="muted small" id="rpc-result-meta"></span>
+    </div>
+    <pre class="code" id="rpc-result">（尚未发送）</pre>
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="rpc-close">关闭</button>
+      <button class="btn primary" id="rpc-send">发送</button>
     </div>
   </div>
 </div>
@@ -377,6 +437,7 @@ document.querySelectorAll("nav button").forEach((btn) => {
     state.tab = btn.dataset.tab;
     $("tab-" + state.tab).hidden = false;
     if (state.tab === "plugins") loadPlugins();
+    if (state.tab === "registry") loadRegistry();
     if (state.tab === "session") loadSession();
   };
 });
@@ -429,6 +490,17 @@ async function refreshStatus() {
     ["活动缓冲", d.stats.activity + " 条（上限 500）"],
     ["活跃工具", d.activeTools == null ? "—" : d.activeTools + " 个"],
     ["正在执行", d.runningTool ? d.runningTool.name : "—"],
+  ]);
+  const sc = d.sidecar || {};
+  const reg = sc.registration;
+  kv($("kv-sidecar"), [
+    ["sidecar", sc.running ? ("运行中 (pid " + sc.pid + ")") : "未运行"],
+    ["模式", sc.mode || "—"],
+    ["节点 ID", sc.nodeId || "—"],
+    ["注册中心", sc.registryUrl || "—"],
+    ["master", sc.masterUrl || "—"],
+    ["心跳", sc.heartbeatIntervalSec == null ? "—" : sc.heartbeatIntervalSec + "s / 超时 " + (sc.heartbeatTimeoutSec || "—") + "s"],
+    ["注册状态", reg ? (reg.ok ? "正常" : "异常" + (reg.error ? "：" + reg.error : "")) : "—"],
   ]);
 }
 
@@ -631,6 +703,142 @@ function renderPlugins(p) {
   $("settings-json").textContent = p.settings ? JSON.stringify(p.settings, null, 2) : "（无相关设置）";
 }
 
+// ===== 注册中心 =====
+let registryAutoTimer = null;
+async function loadRegistry() {
+  let d;
+  try { d = await api("/api/registry"); } catch (e) { showError("获取注册中心数据失败: " + e.message); return; }
+  const meta = $("registry-meta");
+  if (d.live) {
+    meta.textContent = "实时数据 · " + fmtTime(Date.now());
+    meta.style.color = "";
+  } else {
+    meta.textContent = "⚠ 不可达：" + (d.error || "未知错误") + "（显示离线快照）";
+    meta.style.color = "var(--yellow)";
+  }
+  kv($("kv-registry"), [
+    ["查询地址", d.queryUrl || "—"],
+    ["注册中心", d.registryUrl || "—"],
+    ["master", d.masterUrl || "—"],
+    ["本机节点", d.nodeId || "—"],
+    ["本机模式", d.mode || "—"],
+    ["心跳", (d.heartbeatIntervalSec == null ? "—" : d.heartbeatIntervalSec + "s") +
+      " / 超时 " + (d.heartbeatTimeoutSec == null ? "—" : d.heartbeatTimeoutSec + "s")],
+    ["节点", (d.total || 0) + " 个（在线 " + (d.online || 0) + "）"],
+    ["数据来源", d.source || "—"],
+  ]);
+  const tb = $("registry-table").querySelector("tbody");
+  tb.innerHTML = "";
+  const nodes = d.nodes || [];
+  if (!nodes.length) {
+    const tr = tb.insertRow(); const td = tr.insertCell(); td.colSpan = 9;
+    td.className = "muted";
+    td.textContent = d.ok === false ? (d.error || "无数据") : "（暂无注册节点）";
+    return;
+  }
+  for (const n of nodes) {
+    const tr = document.createElement("tr");
+    if (n.self) tr.style.background = "rgba(88,166,255,.08)";
+    const nd = document.createElement("td"); nd.className = "mono";
+    nd.textContent = n.nodeId;
+    if (n.self) {
+      const p = document.createElement("span"); p.className = "pill on"; p.textContent = "本机";
+      nd.appendChild(document.createTextNode(" ")); nd.appendChild(p);
+    }
+    const host = document.createElement("td");
+    host.textContent = n.hostname || "—";
+    if (n.addresses.length) {
+      const sm = document.createElement("small");
+      sm.className = "desc mono"; sm.textContent = n.addresses.join(", ");
+      host.appendChild(sm);
+    }
+    const mode = document.createElement("td"); mode.className = "mono"; mode.textContent = n.mode || "—";
+    const st = document.createElement("td");
+    const pill = document.createElement("span");
+    pill.className = "pill " + (n.status === "online" ? "on" : "off");
+    pill.textContent = n.status;
+    st.appendChild(pill);
+    const pid = document.createElement("td"); pid.className = "mono"; pid.textContent = n.pi.pid || "—";
+    const web = document.createElement("td"); web.className = "mono";
+    if (n.pi.webUrl) {
+      const a = document.createElement("a");
+      a.href = n.pi.webUrl; a.target = "_blank"; a.rel = "noopener"; a.textContent = n.pi.webUrl;
+      web.appendChild(a);
+    } else { web.textContent = "—"; }
+    const rpc = document.createElement("td"); rpc.className = "mono";
+    if (n.pi.rpcPath) {
+      const askLink = document.createElement("a");
+      askLink.href = "#";
+      askLink.textContent = (n.pi.rpcKind === "pipe" ? "pipe " : n.pi.rpcKind === "fifo" ? "fifo " : "") + n.pi.rpcPath;
+      askLink.title = "点击试问：新建独立会话，发送消息并查看回复";
+      askLink.onclick = (e) => { e.preventDefault(); openAskDialog(n); };
+      rpc.appendChild(askLink);
+    } else {
+      rpc.textContent = "—";
+    }
+    const hb = document.createElement("td"); hb.className = "mono";
+    hb.textContent = n.heartbeatAgeSec == null ? "—" : n.heartbeatAgeSec + "s 前";
+    const rs = document.createElement("td"); rs.className = "mono"; rs.textContent = n.sidecar.restarts + " 次";
+    tr.append(nd, host, mode, st, pid, web, rpc, hb, rs);
+    tb.appendChild(tr);
+  }
+}
+$("btn-registry-refresh").onclick = loadRegistry;
+$("registry-auto").onchange = (e) => {
+  if (registryAutoTimer) { clearInterval(registryAutoTimer); registryAutoTimer = null; }
+  if (e.target.checked) {
+    registryAutoTimer = setInterval(() => { if (state.tab === "registry") loadRegistry(); }, 5000);
+  }
+};
+
+// ===== RPC 试问弹窗 =====
+let rpcTarget = null;
+function openAskDialog(n) {
+  rpcTarget = n;
+  $("rpc-node").textContent = n.nodeId;
+  $("rpc-path").textContent = n.pi.rpcPath || "—";
+  $("rpc-message").value = "";
+  $("rpc-result").textContent = "（尚未发送）";
+  $("rpc-result-meta").textContent = "";
+  $("rpc-modal-back").style.display = "flex";
+  $("rpc-message").focus();
+}
+function closeAskDialog() {
+  $("rpc-modal-back").style.display = "none";
+}
+$("rpc-close").onclick = closeAskDialog;
+$("rpc-modal-back").addEventListener("click", (e) => {
+  if (e.target === $("rpc-modal-back")) closeAskDialog();
+});
+$("rpc-message").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("rpc-send").click();
+});
+$("rpc-send").onclick = async () => {
+  if (!rpcTarget) return;
+  const message = $("rpc-message").value.trim();
+  if (!message) { toast("请输入消息内容", "err"); return; }
+  const timeoutSec = Number($("rpc-timeout").value) || 120;
+  const btn = $("rpc-send");
+  btn.disabled = true;
+  $("rpc-result-meta").textContent = "正在新建会话并等待回复…";
+  $("rpc-result").textContent = "…";
+  try {
+    const d = await api("/api/rpc/ask", {
+      method: "POST",
+      body: JSON.stringify({ nodeId: rpcTarget.nodeId, message, timeoutSec }),
+    });
+    $("rpc-result").textContent = d.reply || "（空回复）";
+    $("rpc-result-meta").textContent =
+      "耗时 " + ((d.durationMs || 0) / 1000).toFixed(1) + "s · 节点 " + d.nodeId +
+      (d.sessionId ? " · 会话 " + d.sessionId : "");
+  } catch (e) {
+    $("rpc-result").textContent = "请求失败: " + e.message;
+    $("rpc-result-meta").textContent = "";
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 // ===== 会话 =====
 let sessionLoaded = false;
 async function loadSession() {
@@ -679,6 +887,7 @@ function refreshAll() {
   refreshStatus();
   pollActivity();
   if (state.tab === "plugins") loadPlugins();
+  if (state.tab === "registry") loadRegistry();
   if (state.tab === "session") loadSession();
   if (state.tab === "logs") loadLogs();
 }

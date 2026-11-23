@@ -1,5 +1,5 @@
 // @ts-ignore
-import { SessionManager, VERSION } from "@earendil-works/pi-coding-agent";
+import { SessionManager, VERSION, RpcClient, getPackageDir } from "@earendil-works/pi-coding-agent";
 // @ts-ignore
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // @ts-ignore
@@ -39,6 +39,11 @@ const CONFIG = {
     /** 日志路径覆盖：默认从 <cwd>/.pi/sessions/ 读取 pi-rpc.log / pi-rpc.err.log */
     stdoutLogOverride: (process.env.PI_WEB_LOG_STDOUT || "").trim(),
     stderrLogOverride: (process.env.PI_WEB_LOG_STDERR || "").trim(),
+    /** sidecar 注册中心：slave 用 master 地址，master 缺省用本机监听地址 */
+    sidecarMasterUrl: (process.env.PI_SIDECAR_MASTER_URL || "").trim().replace(/\/+$/, ""),
+    sidecarToken: (process.env.PI_SIDECAR_TOKEN || "").trim(),
+    sidecarRegistryHost: (process.env.PI_SIDECAR_REGISTRY_HOST || "").trim() || "127.0.0.1",
+    sidecarRegistryPort: parsePort(process.env.PI_SIDECAR_REGISTRY_PORT, 3180, "PI_SIDECAR_REGISTRY_PORT"),
 };
 
 const MAX_ACTIVITY = 500;
@@ -84,11 +89,11 @@ function parseEnabled(raw: string | undefined): boolean | null {
     return null;
 }
 
-function parsePort(raw: string | undefined, fallback: number): number {
+function parsePort(raw: string | undefined, fallback: number, envName = "PI_WEB_PORT"): number {
     if (!raw) return fallback;
     const n = Number(raw.trim());
     if (Number.isInteger(n) && n > 0 && n < 65536) return n;
-    console.error(`[pi-web] PI_WEB_PORT 值非法（"${raw}"），使用默认端口 ${fallback}`);
+    console.error(`[pi-web] ${envName} 值非法（"${raw}"），使用默认端口 ${fallback}`);
     return fallback;
 }
 
@@ -213,6 +218,336 @@ function logStat(file: string) {
         size: st?.size ?? 0,
         mtimeMs: st?.mtimeMs ?? null,
     };
+}
+
+// ===== sidecar 注册中心 =====
+
+const REGISTRY_TIMEOUT_MS = 3000;
+const REGISTRY_FALLBACK_HB_TIMEOUT_MS = 30_000;
+
+/** 解析 key=value 行式 info 文件（缺失返回 {}） */
+function readInfoFields(file: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    try {
+        const text = fs.readFileSync(file, "utf8");
+        for (const line of text.split(/\r?\n/)) {
+            const i = line.indexOf("=");
+            if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+        }
+    } catch {
+        // 文件不存在
+    }
+    return out;
+}
+
+function readJsonFile(file: string): any {
+    try {
+        return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+        return null;
+    }
+}
+
+function sidecarInfo(): Record<string, string> {
+    return readInfoFields(path.join(sessionDir(), "pi-sidecar.info"));
+}
+
+function pidAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e: any) {
+        return e?.code === "EPERM"; // 无权限时按存活处理
+    }
+}
+
+/** 注册中心查询地址：PI_SIDECAR_MASTER_URL → pi-sidecar.info 的 master/registry → 本机默认端口 */
+function registryBaseUrl(): string {
+    if (CONFIG.sidecarMasterUrl) return CONFIG.sidecarMasterUrl;
+    const info = sidecarInfo();
+    const fromInfo = (info.master_url || info.registry_url || "").replace(/\/+$/, "");
+    if (fromInfo) return fromInfo;
+    return `http://${CONFIG.sidecarRegistryHost}:${CONFIG.sidecarRegistryPort}`;
+}
+
+async function fetchRegistryNodes(url: string): Promise<any> {
+    const headers: Record<string, string> = {};
+    if (CONFIG.sidecarToken) headers.authorization = `Bearer ${CONFIG.sidecarToken}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REGISTRY_TIMEOUT_MS);
+    try {
+        const res = await fetch(`${url}/api/nodes`, { headers, signal: ctrl.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** 注册中心节点记录归一化为前端展示结构 */
+function normalizeNode(rec: any, now: number, selfId: string) {
+    const pi = rec?.pi ?? {};
+    const sc = rec?.sidecar ?? {};
+    const hb = Number(rec?.last_heartbeat) || 0;
+    const registeredAt = Number(rec?.registered_at) || 0;
+    return {
+        nodeId: String(rec?.node_id ?? "?"),
+        hostname: rec?.hostname ?? null,
+        addresses: Array.isArray(rec?.addresses) ? rec.addresses : [],
+        workdir: rec?.workdir ?? null,
+        platform: rec?.platform ?? null,
+        mode: rec?.mode ?? null,
+        status: rec?.status === "online" ? "online" : "offline",
+        self: !!selfId && rec?.node_id === selfId,
+        registeredAt: registeredAt || null,
+        lastHeartbeat: hb || null,
+        heartbeatAgeSec: hb ? Math.max(0, Math.round((now - hb) / 1000)) : null,
+        pi: {
+            pid: Number(pi.pid) || 0,
+            startedAt: pi.started_at ?? null,
+            webUrl: pi.web_url || null,
+            rpcKind: pi.rpc_kind ?? null,
+            rpcPath: pi.rpc_path ?? null,
+            sessionFile: pi.session_file ?? null,
+        },
+        sidecar: {
+            pid: Number(sc.pid) || 0,
+            restarts: Number(sc.restarts) || 0,
+            startedAt: sc.started_at ?? null,
+        },
+    };
+}
+
+function countNodes(nodes: any[]) {
+    return {
+        total: nodes.length,
+        online: nodes.filter((n) => n.status === "online").length,
+    };
+}
+
+/** 注册中心数据：优先实时 HTTP，失败时回落本地 registry.json（master）/ self.json（slave）快照 */
+async function registryPayload() {
+    const info = sidecarInfo();
+    const selfId = info.node_id || "";
+    const url = registryBaseUrl();
+    const base = {
+        ok: true,
+        queryUrl: url,
+        registryUrl: info.registry_url || null,
+        masterUrl: info.master_url || null,
+        mode: info.mode || null,
+        nodeId: selfId || null,
+        heartbeatIntervalSec: Number(info.heartbeat_interval_s) || null,
+        heartbeatTimeoutSec: Number(info.heartbeat_timeout_s) || null,
+    };
+    try {
+        const data = await fetchRegistryNodes(url);
+        const now = Number(data?.now) || Date.now();
+        const nodes = (Array.isArray(data?.nodes) ? data.nodes : []).map((r: any) =>
+            normalizeNode(r, now, selfId),
+        );
+        return {
+            ...base,
+            live: true,
+            stale: false,
+            source: url,
+            heartbeatTimeoutSec:
+                Number(data?.heartbeat_timeout_ms) > 0
+                    ? Math.round(Number(data.heartbeat_timeout_ms) / 1000)
+                    : base.heartbeatTimeoutSec,
+            ...countNodes(nodes),
+            nodes,
+        };
+    } catch (e) {
+        const err = errText(e);
+        const now = Date.now();
+        const reg = readJsonFile(path.join(sessionDir(), "registry.json"));
+        if (reg?.nodes && typeof reg.nodes === "object") {
+            const hbTimeout = REGISTRY_FALLBACK_HB_TIMEOUT_MS;
+            const nodes = Object.values(reg.nodes).map((r: any) =>
+                normalizeNode(
+                    {
+                        ...r,
+                        status: now - (Number(r?.last_heartbeat) || 0) <= hbTimeout ? "online" : "offline",
+                    },
+                    now,
+                    selfId,
+                ),
+            );
+            return {
+                ...base,
+                live: false,
+                stale: true,
+                source: "sessions/registry.json（离线快照）",
+                error: err,
+                ...countNodes(nodes),
+                nodes,
+            };
+        }
+        const self = readJsonFile(path.join(sessionDir(), "self.json"));
+        if (self?.record) {
+            const nodes = [normalizeNode({ ...self.record, status: "online" }, now, selfId)];
+            return {
+                ...base,
+                live: false,
+                stale: true,
+                source: "sessions/self.json（本机快照）",
+                error: err,
+                ...countNodes(nodes),
+                nodes,
+            };
+        }
+        return {
+            ...base,
+            ok: false,
+            live: false,
+            stale: true,
+            source: null,
+            error: `注册中心不可达: ${err}`,
+            total: 0,
+            online: 0,
+            nodes: [],
+        };
+    }
+}
+
+/** 「概览」用的 sidecar 摘要：只读本地 info / self.json，不做网络请求 */
+function sidecarStatusPayload() {
+    const info = sidecarInfo();
+    const pid = Number(info.pid) || 0;
+    const self = readJsonFile(path.join(sessionDir(), "self.json"));
+    const reg = self?.registration;
+    return {
+        running: pid > 0 && pidAlive(pid),
+        pid: pid || null,
+        mode: info.mode || null,
+        nodeId: info.node_id || null,
+        registryUrl: info.registry_url || null,
+        masterUrl: info.master_url || null,
+        heartbeatIntervalSec: Number(info.heartbeat_interval_s) || null,
+        heartbeatTimeoutSec: Number(info.heartbeat_timeout_s) || null,
+        queryUrl: registryBaseUrl(),
+        registration: reg
+            ? {
+                  ok: !!reg.ok,
+                  state: reg.state ?? null,
+                  error: reg.error || null,
+                  at: Number(reg.at) || null,
+              }
+            : null,
+    };
+}
+
+// ===== RPC 试问（新建独立会话，不干扰当前会话） =====
+
+const RPC_ASK_DEFAULT_TIMEOUT_SEC = 120;
+const RPC_ASK_MAX_TIMEOUT_SEC = 300;
+const RPC_ASK_MAX_MESSAGE = 8000;
+const RPC_ASK_STDERR_MAX = 2000;
+let rpcAskInFlight = false;
+
+type AskResult = { code: number; payload: Record<string, unknown> };
+
+function truncateText(s: string, max: number): string {
+    return s.length > max ? `…（前 ${max} 字）\n` + s.slice(-max) : s;
+}
+
+/**
+ * 向指定节点发起一次独立询问：
+ * - 每次拉起一个全新的 pi RPC 进程（`--no-session`），不复用当前会话
+ * - 仅限本机节点：RPC 入口是命名管道 / FIFO，跨主机不可达
+ */
+async function rpcAsk(body: any): Promise<AskResult> {
+    const message = typeof body?.message === "string" ? body.message.trim() : "";
+    const nodeId = typeof body?.nodeId === "string" ? body.nodeId.trim() : "";
+    const timeoutSec = Math.min(
+        Math.max(Number(body?.timeoutSec) || RPC_ASK_DEFAULT_TIMEOUT_SEC, 5),
+        RPC_ASK_MAX_TIMEOUT_SEC,
+    );
+    if (!message) return { code: 400, payload: { ok: false, error: "message 不能为空" } };
+    if (message.length > RPC_ASK_MAX_MESSAGE) {
+        return { code: 400, payload: { ok: false, error: `message 过长（上限 ${RPC_ASK_MAX_MESSAGE} 字符）` } };
+    }
+    if (rpcAskInFlight) {
+        return { code: 429, payload: { ok: false, error: "已有一次试问正在执行，请等待完成" } };
+    }
+
+    const registry = await registryPayload();
+    const nodes: any[] = registry.nodes || [];
+    const node = nodeId ? nodes.find((n) => n.nodeId === nodeId) : nodes.find((n) => n.self);
+    if (!node) {
+        return { code: 404, payload: { ok: false, error: `未找到节点: ${nodeId || "(空)"}` } };
+    }
+
+    const workdir = typeof node.workdir === "string" ? node.workdir : "";
+    const sameHost = node.self || node.hostname === os.hostname();
+    const dirOk = !!workdir && !!safeGet(() => fs.statSync(workdir).isDirectory());
+    if (!sameHost) {
+        return {
+            code: 409,
+            payload: {
+                ok: false,
+                error: `节点 ${node.nodeId} 不在本机：RPC 入口（命名管道/FIFO）仅本机可达，请在对应主机的管理界面操作`,
+            },
+        };
+    }
+    if (!dirOk) {
+        return { code: 409, payload: { ok: false, error: `节点工作目录不可用: ${workdir || "(空)"}` } };
+    }
+
+    rpcAskInFlight = true;
+    const startedMs = Date.now();
+    let client: any = null;
+    try {
+        client = new RpcClient({
+            cliPath: path.join(getPackageDir(), "dist", "cli.js"),
+            cwd: workdir,
+            args: ["--approve", "--no-session"],
+            // 新进程只用于回答：关闭 Web UI，避免再次占用管理端口
+            env: { PI_WEB_ENABLED: "0" },
+        });
+        await client.start();
+        await client.promptAndWait(message, undefined, timeoutSec * 1000);
+        const reply = await client.getLastAssistantText();
+        let state: any = null;
+        try {
+            state = await client.getState();
+        } catch {
+            // 状态查询失败不影响回复
+        }
+        record("action", { action: "rpc_ask", nodeId: node.nodeId, ms: Date.now() - startedMs });
+        return {
+            code: 200,
+            payload: {
+                ok: true,
+                nodeId: node.nodeId,
+                rpcPath: node.pi?.rpcPath ?? null,
+                reply: reply ?? "",
+                sessionId: state?.sessionId ?? null,
+                durationMs: Date.now() - startedMs,
+            },
+        };
+    } catch (e) {
+        const stderr = safeGet(() => String(client?.getStderr?.() ?? "").trim()) || "";
+        return {
+            code: 502,
+            payload: {
+                ok: false,
+                nodeId: node.nodeId,
+                error: errText(e),
+                stderr: stderr ? truncateText(stderr, RPC_ASK_STDERR_MAX) : null,
+                durationMs: Date.now() - startedMs,
+            },
+        };
+    } finally {
+        try {
+            await client?.stop();
+        } catch {
+            // 停止失败忽略：进程已被回收或超时
+        }
+        rpcAskInFlight = false;
+    }
 }
 
 /** 读取文件末尾：限制读取字节数与行数，返回是否发生截断 */
@@ -534,6 +869,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
                 sendJson(res, 200, await sessionsPayload());
                 return;
             }
+            case "registry": {
+                sendJson(res, 200, await registryPayload());
+                return;
+            }
         }
         sendJson(res, 404, { ok: false, error: `未知接口: GET /api/${route}` });
         return;
@@ -603,6 +942,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
                 }, 500);
                 return;
             }
+            case "rpc/ask": {
+                const result = await rpcAsk(body);
+                sendJson(res, result.code, result.payload);
+                return;
+            }
         }
         sendJson(res, 404, { ok: false, error: `未知接口: POST /api/${route}` });
         return;
@@ -652,6 +996,7 @@ function statusPayload() {
             port: CONFIG.port,
             tokenProtected: !!CONFIG.token,
         },
+        sidecar: sidecarStatusPayload(),
         logs: {
             stdout: logStat(logs.stdout),
             stderr: logStat(logs.stderr),

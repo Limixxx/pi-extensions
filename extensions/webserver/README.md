@@ -44,6 +44,16 @@ webserver/
 | `PI_WEB_TOKEN` | 空 | Bearer 访问令牌；留空不鉴权，仅建议本机回环使用 |
 | `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | 空 | RPC 日志路径覆盖 |
 
+注册中心相关变量复用 sidecar 的配置，无需额外设置：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `PI_SIDECAR_MASTER_URL` | 空 | 设置后「注册中心」页签查询该地址（slave 场景） |
+| `PI_SIDECAR_TOKEN` | 空 | 注册中心启用鉴权时的 Bearer 令牌 |
+| `PI_SIDECAR_REGISTRY_HOST` / `PI_SIDECAR_REGISTRY_PORT` | `127.0.0.1:3180` | 均未配置时，作为本机注册中心的兜底查询地址 |
+
+查询地址解析顺序：`PI_SIDECAR_MASTER_URL` → `sessions/pi-sidecar.info` 的 `master_url` / `registry_url` → `http://<REGISTRY_HOST>:<REGISTRY_PORT>`。
+
 日志文件定位顺序（`resolveLogPaths`，stdout/stderr 各自独立取值）：
 
 1. `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` 覆盖值；
@@ -54,16 +64,17 @@ webserver/
 
 ## 功能页面
 
-页面为单 Tab 应用，含四个页签：
+页面为单 Tab 应用，含五个页签：
 
 | 页签 | 内容 |
 | --- | --- |
-| **概览** | 进程（pid/Node 版本/pi 版本/模式/内存 RSS）、会话（文件/名称/条目数）、Web 服务（地址/监听/日志大小）、统计（任务数/工具调用与出错次数/正在执行的工具）；操作按钮：刷新、中止当前任务、压缩会话上下文、停止 pi 进程（双重确认）；最近活动事件流 |
+| **概览** | 进程（pid/Node 版本/pi 版本/模式/内存 RSS）、会话（文件/名称/条目数）、Web 服务（地址/监听/日志大小）、sidecar 与注册中心摘要（运行状态/模式/节点 ID/注册状态）、统计（任务数/工具调用与出错次数/正在执行的工具）；操作按钮：刷新、中止当前任务、压缩会话上下文、停止 pi 进程（双重确认）；最近活动事件流 |
 | **日志** | 查看 stdout（RPC JSONL）与 stderr 日志：末尾行数选择（100/300/1000/3000）、关键字过滤、5 秒自动刷新、下载完整日志 |
 | **插件与工具** | 活跃工具集勾选（保存即改 `pi.setActiveTools`，仅当前会话生效）、斜杠命令清单、provider 与模型列表（含上下文窗口）、MCP 服务器配置、磁盘上项目/用户扩展目录清单、与扩展相关的 settings 白名单 |
+| **注册中心** | sidecar 注册中心节点列表：节点 ID/主机与地址/模式/在线状态/pi pid/Web UI 链接/RPC 入口/心跳时间/自动重启次数；本机节点高亮标记；RPC 入口以链接形式展示，点击即「试问」——弹窗发送消息并显示回复，每次都会新建独立会话；注册中心不可达时展示本地持久化快照并标记过期 |
 | **会话** | 当前会话信息、最近 50 条条目摘要（角色/类型/预览）、历史会话列表（按修改时间倒序，最多 100 个） |
 
-前端轮询：状态每 5s、活动事件每 2.5s、日志（勾选后）每 5s。
+前端轮询：状态每 5s、活动事件每 2.5s、日志（勾选后）每 5s、注册中心（勾选后）每 5s。
 
 ## 活动事件
 
@@ -89,6 +100,7 @@ webserver/
 | `/api/plugins` | provider 与模型列表、MCP 服务器、settings 白名单、磁盘扩展目录 |
 | `/api/session` | 当前会话信息与最近条目摘要 |
 | `/api/sessions` | 历史会话列表（按修改时间倒序，最多 100 个） |
+| `/api/registry` | sidecar 注册中心数据：查询地址、本机节点信息、节点列表（含状态/心跳/Web UI/RPC 入口）；优先实时请求注册中心，失败时回落 `sessions/registry.json`（master）或 `self.json`（slave）快照，返回 `live` / `stale` / `error` 标记 |
 
 ### POST（body 为 JSON）
 
@@ -98,6 +110,7 @@ webserver/
 | `/api/abort` | 请求中止当前任务 |
 | `/api/compact` | 请求压缩当前会话上下文 |
 | `/api/shutdown` | 停止 pi 进程；先返回响应，约 0.5 秒后退出 |
+| `/api/rpc/ask` | `{"nodeId": string, "message": string, "timeoutSec"?: number}` 对指定节点发起一次独立询问：每次拉起全新的 pi RPC 进程（`--no-session`，不保存会话）并返回助手回复；`timeoutSec` 5–300，默认 120。仅支持本机节点（RPC 入口是命名管道/FIFO，跨主机不可达），并发仅允许 1 个 |
 
 未知路由返回 404，非 GET/POST 方法返回 405。
 
@@ -145,6 +158,9 @@ curl -H "Authorization: Bearer $PI_WEB_TOKEN" http://127.0.0.1:3170/api/status
 
 # 增量拉取活动事件
 curl 'http://127.0.0.1:3170/api/activity?since=0&limit=50'
+
+# 注册中心节点（注册中心启用令牌时同样需要 Bearer）
+curl -H "Authorization: Bearer $PI_WEB_TOKEN" http://127.0.0.1:3170/api/registry
 ```
 
 浏览器访问 `sessions/pi-web.info` 中 `url=` 指向的地址即可打开管理页面。
