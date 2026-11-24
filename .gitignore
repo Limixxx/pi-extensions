@@ -12,3 +12,7 @@ sessions/*.json
 
 *.lock
 *.tmp
+
+# —— skills：仅保留 .keep ——
+skills/*
+!skills/.keep
