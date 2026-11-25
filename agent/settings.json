@@ -11,8 +11,17 @@
     "token": "1234567890"
   },
   "sidecar": {
+    "masterUrl": "",
+    "mode": "master",
     "registryHost": "0.0.0.0",
     "registryPort": 33180,
+    "token": "",
+    "nodeId": "",
+    "heartbeatInterval": 10,
+    "heartbeatTimeout": 30,
+    "offlineRetention": 3600,
+    "backoffCap": 30,
+    "stopTimeout": 15,
     "childCmd": "pi --mode rpc --approve --continue --session-dir .pi/sessions"
   }
 }
