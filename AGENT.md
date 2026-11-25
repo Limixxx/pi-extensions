@@ -4,11 +4,11 @@
 
 ## 目录职责
 
-- `scripts/init.sh`：安装/更新 pi 与 `npm:pi-feishu` 扩展。
+- `scripts/init.sh`：安装/更新 pi 与必需扩展（`npm:pi-dsml`、`git:github.com/Limixxx/pi-feishu@main`、`git:github.com/Limixxx/pi-subagents@main`），依赖列表来自 `~/.pi/agent/settings.json` 的 `packages` 字段，本机 `pi list` 输出即真相源。
 - `scripts/start.sh`：默认拉起 sidecar 守护进程（`extensions/sidecar/sidecar.mjs`），由它以 RPC 模式启动并守护 pi；`PI_SIDECAR_ENABLED=0` 时回退为直接后台启动 pi（旧版行为）。pid、日志与启动信息写入 `sessions/`。
 - `scripts/stop.sh`：停止 sidecar（发 SIGTERM + 写停止标记文件，由 sidecar 负责停 pi 子进程、注销节点并清理文件）；直启模式下直接停 pi。
 - `scripts/init.ps1` / `start.ps1` / `stop.ps1`：上面两个脚本的 Windows PowerShell 版本，行为一致。sidecar 托管时 `pi-rpc.pid` 记录的是 cmd 垫片进程的 pid，pi 本身的 pid 在 `pi-rpc.info` 的 `pi_pid=`；命令入口是命名管道 `\\.\pipe\pi-rpc-<hash>`（名字见 `pi-rpc.info` 的 `pipe=`，与旧版 keeper 兼容）。`PI_SIDECAR_ENABLED=0` 时回退为旧版 keeper 直启。
-- `extensions/litellm-provider.ts`：向 pi 注册 `maas` provider，模型列表来自 `LITELLM_BASE_URL/models`，默认模型为 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）。未设置 `LITELLM_API_KEY` 时插件不启用（跳过注册，不抛错）。
+- `extensions/litellm-provider.ts`：向 pi 注册 `maas` provider，模型列表来自 `LITELLM_BASE_URL/models`，默认模型为 `LITELLM_DEFAULT_MODEL`（缺省 `DeepSeek-V4-Flash`）。未设置 `LITELLM_API_KEY` 时插件不启用（跳过注册，不抛错）。默认模型也可通过项目 `.pi/settings.json` 的 `defaultProvider` / `defaultModel` 声明（provider 必须是 `maas`）。
 - `extensions/kubectl.ts`：注册 `kubectl` 工具，按 `kubectl.tools` 白名单前缀匹配，未列出的子命令默认拒绝；`timeout` 参数默认 60s、上限 600s。另注册 `/kubectl` 斜杠命令（仅 TUI 模式）查看当前白名单。
 - `extensions/kubectl.tools`：kubectl 子命令白名单，每行一条、`#` 注释，每次调用重新读取，改完立即生效。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具（`gh_auth`、`gh_issue`、`gh_pr`、`gh_repo`、`gh_actions`、`gh_release`、`gh_api`、`gh_search`、`gh_secret`、`gh_variable`、`gh_label`、`gh_gist`、`gh_config`、`gh_key`、`gh_project`），封装本机 `gh` CLI。
@@ -20,7 +20,7 @@
 ## 常用操作
 
 ```bash
-.pi/scripts/init.sh          # 安装 pi / pi-feishu，并更新扩展版本
+.pi/scripts/init.sh          # 安装 pi、dsml、pi-feishu、pi-subagents，并更新扩展版本
 .pi/scripts/start.sh         # 启动 sidecar，由其拉起并守护 pi --mode rpc
 .pi/scripts/stop.sh          # 停止 sidecar 与 pi
 pi list                      # 查看已安装扩展（含 pi-feishu）
@@ -44,26 +44,38 @@ stdout 是严格 JSONL 协议记录（写入 `pi-rpc.log`），stderr 是诊断�
 
 | 变量 | 用途 | 来源 |
 | --- | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 用，环境变量优先于 settings.json） | `.env` |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 用） | 环境变量优先于 settings.json（见下） |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址，默认 `http://i-nhi.zhejianglab.org/maas/v1` | `.env` |
 | `LITELLM_API_KEY` | 网关密钥，未设置时不启用 `maas` provider 插件 | `.env` |
-| `LITELLM_DEFAULT_MODEL` | 新建会话默认模型，缺省 `GLM-5.3` | `.env` |
+| `LITELLM_DEFAULT_MODEL` | 新建会话默认模型，缺省 `DeepSeek-V4-Flash` | `.env` |
 | `KUBECTL_TOOLS_FILE` | 覆盖 kubectl 白名单文件路径 | 可选 |
-| `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用 | 可选 |
-| `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170` | 可选 |
-| `PI_WEB_TOKEN` | Web 管理界面访问令牌（Bearer），设置后 `/api` 接口需携带 | 可选 |
+| `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用 | 可选（settings.json `"web.enabled"` 优先） |
+| `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170` | 可选（settings.json `"web.host"` / `"web.port"` 优先） |
+| `PI_WEB_TOKEN` | Web 管理界面访问令牌（Bearer），设置后 `/api` 接口需携带 | 可选（settings.json `"web.token"` 优先） |
 | `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖；不设置时按约定路径 `sessions/pi-rpc.log` / `pi-rpc.err.log` 定位 | 可选 |
 | `PI_SIDECAR_ENABLED` | sidecar 守护开关，默认启用；设为 0 回退旧版直启 | 可选 |
-| `PI_SIDECAR_MODE` | sidecar 模式 `master` / `slave`；不设则 auto（配了 `PI_SIDECAR_MASTER_URL` 为 slave，否则 master） | 可选 |
-| `PI_SIDECAR_MASTER_URL` | slave 节点指向的 master 注册中心地址 | `.env`（slave 必填） |
-| `PI_SIDECAR_REGISTRY_HOST` / `PI_SIDECAR_REGISTRY_PORT` | master 注册中心监听地址，默认 `127.0.0.1:3180` | 可选 |
-| `PI_SIDECAR_TOKEN` | 注册/心跳/查询接口 Bearer Token，不设则免鉴权 | 可选 |
-| `PI_SIDECAR_NODE_ID` | 节点 ID，默认 `<hostname>-<workdir 哈希前 6 位>` | 可选 |
-| `PI_SIDECAR_HEARTBEAT_INTERVAL` / `PI_SIDECAR_HEARTBEAT_TIMEOUT` / `PI_SIDECAR_OFFLINE_RETENTION` | 心跳间隔/超时判定/离线清理秒数，默认 10 / 30 / 3600 | 可选 |
-| `PI_SIDECAR_BACKOFF_CAP` | pi 崩溃重启退避封顶秒（从 1s 起指数退避），默认 30 | 可选 |
-| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束（SIGKILL / `taskkill /T /F`），默认 15 | 可选 |
+| `PI_SIDECAR_MODE` | sidecar 模式 `master` / `slave`；不设则 auto（配了 `PI_SIDECAR_MASTER_URL` 为 slave，否则 master） | 可选（settings.json `"sidecar.mode"` 优先） |
+| `PI_SIDECAR_MASTER_URL` | slave 节点指向的 master 注册中心地址 | `.env`（slave 必填；settings.json `"sidecar.masterUrl"` 优先） |
+| `PI_SIDECAR_REGISTRY_HOST` / `PI_SIDECAR_REGISTRY_PORT` | master 注册中心监听地址，默认 `127.0.0.1:3180` | 可选（settings.json `"sidecar.registryHost"` / `"sidecar.registryPort"` 优先） |
+| `PI_SIDECAR_TOKEN` | 注册/心跳/查询接口 Bearer Token，不设则免鉴权 | 可选（settings.json `"sidecar.token"` 优先） |
+| `PI_SIDECAR_NODE_ID` | 节点 ID，默认 `<hostname>-<workdir 哈希前 6 位>` | 可选（settings.json `"sidecar.nodeId"` 优先） |
+| `PI_SIDECAR_HEARTBEAT_INTERVAL` / `PI_SIDECAR_HEARTBEAT_TIMEOUT` / `PI_SIDECAR_OFFLINE_RETENTION` | 心跳间隔/超时判定/离线清理秒数，默认 10 / 30 / 3600 | 可选（settings.json `"sidecar.heartbeatInterval"` 等优先） |
+| `PI_SIDECAR_BACKOFF_CAP` | pi 崩溃重启退避封顶秒（从 1s 起指数退避），默认 30 | 可选（settings.json `"sidecar.backoffCap"` 优先） |
+| `PI_SIDECAR_CHILD_CMD` | sidecar 托管的 pi 子进程启动命令，默认 `pi --mode rpc --approve`，可追加 `--continue`、`--session-dir` 等参数 | 可选（settings.json `"sidecar.childCmd"` 优先） |
+| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束（SIGKILL / `taskkill /T /F`），默认 15 | 可选（settings.json `"sidecar.stopTimeout"` 优先） |
 
 `.env` 使用 shell `export` 语法，脚本通过 `set -a; . .env` 加载；手工启动时同样需要先 dot-source。
+
+**配置来源优先级**（从高到低）：
+
+| 配置块 | 优先级 |
+| --- | --- |
+| sidecar | `~/.pi/agent/settings.json` → 项目 `.pi/settings.json` → 环境变量 → 默认值 |
+| web | `~/.pi/agent/settings.json` → 项目 `.pi/settings.json` → 环境变量 → 默认值 |
+| feishu | CLI 标志 → 环境变量 → `~/.pi/agent/settings.json` → 项目 `.pi/settings.json` |
+| litellm | **仅环境变量**（`litellm-provider.ts` 未读取 settings.json） |
+
+即：sidecar/web 侧的数字/布尔配置既可以写在 `.env`，也可以固化在 `.pi/settings.json`（项目级优先于 agent 级）；litellm 网关配置**只能通过**进程环境变量生效，settings.json 对它无效。`scripts/init.sh` / `init.ps1` 会在启动脚本最前加载 `.env`，之后 settings.json 的 sidecar/web 字段再覆盖对应的环境变量值。
 
 ## 约定
 

@@ -67,6 +67,35 @@ function loadSettingsWeb(): Record<string, unknown> {
 
 const SETTINGS = loadSettingsWeb();
 
+/** 单独加载 sidecar 字段（与 web 分离，避免 token 键冲突） */
+function loadSettingsSidecar(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    const projectPath = path.join(process.cwd(), ".pi", "settings.json");
+    const userPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+    const files: string[] = [];
+    if (userPath !== projectPath) files.push(userPath);
+    files.push(projectPath);
+    for (const f of files) {
+        try {
+            if (!fs.existsSync(f)) continue;
+            const data = JSON.parse(fs.readFileSync(f, "utf8"));
+            const sc = data && typeof data === "object" ? data.sidecar : undefined;
+            if (sc && typeof sc === "object") Object.assign(out, sc);
+        } catch (e) {
+            console.error(`[pi-web] 读取 settings.json 失败(${f}): ${errText(e)}`);
+        }
+    }
+    return out;
+}
+
+const SIDECAR_SETTINGS = loadSettingsSidecar();
+
+function sidecarStr(key: string): string {
+    const v = SIDECAR_SETTINGS[key];
+    if (v === undefined || v === null) return "";
+    return typeof v === "string" ? v : String(v);
+}
+
 function settingStr(key: string): string | undefined {
     const v = SETTINGS[key];
     if (v === undefined || v === null) return undefined;
@@ -125,10 +154,18 @@ const CONFIG = {
     stdoutLogOverride: resolveLogOverride("logStdout", "PI_WEB_LOG_STDOUT"),
     stderrLogOverride: resolveLogOverride("logStderr", "PI_WEB_LOG_STDERR"),
     /** sidecar 注册中心：slave 用 master 地址，master 缺省用本机监听地址 */
-    sidecarMasterUrl: (process.env.PI_SIDECAR_MASTER_URL || "").trim().replace(/\/+$/, ""),
-    sidecarToken: (process.env.PI_SIDECAR_TOKEN || "").trim(),
-    sidecarRegistryHost: (process.env.PI_SIDECAR_REGISTRY_HOST || "").trim() || "127.0.0.1",
-    sidecarRegistryPort: parsePort(process.env.PI_SIDECAR_REGISTRY_PORT, 3180, "PI_SIDECAR_REGISTRY_PORT"),
+    sidecarMasterUrl: (sidecarStr("masterUrl") || (process.env.PI_SIDECAR_MASTER_URL || "").trim()).replace(/\/+$/, ""),
+    sidecarToken: sidecarStr("token") || (process.env.PI_SIDECAR_TOKEN || "").trim(),
+    sidecarRegistryHost: sidecarStr("registryHost") || (process.env.PI_SIDECAR_REGISTRY_HOST || "").trim() || "127.0.0.1",
+    sidecarRegistryPort: (() => {
+        const sv = SIDECAR_SETTINGS["registryPort"];
+        if (sv !== undefined && sv !== null) {
+            const n = Number(sv);
+            if (Number.isInteger(n) && n > 0 && n < 65536) return n;
+            console.error(`[pi-web] settings.json 中 sidecar.registryPort 值非法（"${String(sv)}"），回退环境变量/默认端口`);
+        }
+        return parsePort(process.env.PI_SIDECAR_REGISTRY_PORT, 3180, "PI_SIDECAR_REGISTRY_PORT");
+    })(),
 };
 
 const MAX_ACTIVITY = 500;

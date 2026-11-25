@@ -8,7 +8,7 @@
 cd .pi
 cp .env.example .env       # 填写飞书凭证与 MaaS 网关配置
 
-scripts/init.sh            # 安装 pi、npm:pi-feishu，并更新扩展
+scripts/init.sh            # 安装 pi、dsml、pi-feishu、pi-subagents，并更新扩展
 scripts/start.sh           # 后台启动 sidecar，由其拉起并守护 pi --mode rpc
 scripts/stop.sh            # 停止 sidecar 与 pi
 ```
@@ -35,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 └── AGENT.md           面向 agent 的详细约定
 ```
 
-- `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `GLM-5.3`）；未设置 `LITELLM_API_KEY` 时不启用该插件。
+- `extensions/litellm-provider.ts`：注册 `maas` provider，从 `LITELLM_BASE_URL/models` 拉取模型列表，新建会话默认选中 `LITELLM_DEFAULT_MODEL`（缺省 `DeepSeek-V4-Flash`）；未设置 `LITELLM_API_KEY` 时不启用该插件。默认模型也可通过项目 `.pi/settings.json` 的 `defaultProvider` / `defaultModel` 声明（provider 必须是 `maas`）。
 - `extensions/kubectl.ts` + `kubectl.tools`：注册 `kubectl` 工具，按白名单前缀匹配，未列出的子命令默认拒绝，白名单改完立即生效；另注册 `/kubectl` 斜杠命令（TUI 模式）查看当前白名单。
 - `extensions/gh_tools.ts`：注册 `gh_*` 系列工具，封装本机 `gh` CLI。
 - `extensions/webserver/`：进程管理 Web UI（`index.ts` + `public/index.html`），RPC 模式自动启动，详见下文与 [extensions/webserver/README.md](extensions/webserver/README.md)；另注册 `/web` 斜杠命令显示管理界面地址。
@@ -43,28 +43,61 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1
 
 ## 环境变量
 
-`.env` 使用 shell `export` 语法，`start.sh` 会以 `set -a` 自动加载；手工启动时先 dot-source。
+`.env` 使用 shell `export` 语法，`start.sh` / `start.ps1` 会在最前加载；手工启动时同样需要先 dot-source。
 
 | 变量 | 说明 |
 | --- | --- |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 使用，环境变量优先于 settings.json） |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书开放平台凭证（pi-feishu 使用，CLI 标志 → 环境变量 → settings.json） |
 | `LITELLM_BASE_URL` | MaaS/LiteLLM 网关地址 |
 | `LITELLM_API_KEY` | 网关密钥，缺失时不启用 `maas` provider 插件 |
-| `LITELLM_DEFAULT_MODEL` | 新建会话默认模型 |
+| `LITELLM_DEFAULT_MODEL` | 新建会话默认模型，缺省 `DeepSeek-V4-Flash` |
 | `KUBECTL_TOOLS_FILE` | 覆盖 kubectl 白名单路径（可选） |
-| `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用（可选） |
-| `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170`（可选） |
-| `PI_WEB_TOKEN` | Web 管理界面访问令牌，设置后 `/api` 接口需携带 Bearer Token（可选） |
+| `PI_WEB_ENABLED` | Web 管理界面开关：留空自动（仅 RPC 模式启动）、1 强制、0 禁用（可选；settings.json `"web.enabled"` 优先） |
+| `PI_WEB_HOST` / `PI_WEB_PORT` | Web 管理界面监听地址与端口，默认 `127.0.0.1:3170`（可选；settings.json `"web.host"` / `"web.port"` 优先） |
+| `PI_WEB_TOKEN` | Web 管理界面访问令牌，设置后 `/api` 接口需携带 Bearer Token（可选；settings.json `"web.token"` 优先） |
 | `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR` | RPC 日志路径覆盖，默认按 `sessions/pi-rpc.log` / `pi-rpc.err.log` 约定路径定位（可选） |
 | `PI_SIDECAR_ENABLED` | sidecar 守护开关：默认启用；设为 0 回退旧版直启（可选） |
-| `PI_SIDECAR_MODE` | 运行模式 `master` / `slave`；不设则 auto（配了 `PI_SIDECAR_MASTER_URL` 为 slave，否则 master）（可选） |
-| `PI_SIDECAR_MASTER_URL` | slave 节点指向的 master 注册中心地址，slave 模式必填（可选） |
-| `PI_SIDECAR_REGISTRY_HOST` / `PI_SIDECAR_REGISTRY_PORT` | master 注册中心监听地址，默认 `127.0.0.1:3180`（可选） |
-| `PI_SIDECAR_TOKEN` | 注册/心跳/查询接口 Bearer Token，不设则免鉴权（可选） |
-| `PI_SIDECAR_NODE_ID` | 节点 ID，默认 `<hostname>-<workdir 哈希前 6 位>`（可选） |
-| `PI_SIDECAR_HEARTBEAT_INTERVAL` / `PI_SIDECAR_HEARTBEAT_TIMEOUT` / `PI_SIDECAR_OFFLINE_RETENTION` | 心跳间隔/超时判定/离线清理秒数，默认 10 / 30 / 3600（可选） |
-| `PI_SIDECAR_BACKOFF_CAP` | pi 崩溃重启退避封顶秒，从 1s 起指数退避，默认 30（可选） |
-| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束，默认 15（可选） |
+| `PI_SIDECAR_MODE` | 运行模式 `master` / `slave`；不设则 auto（配了 `PI_SIDECAR_MASTER_URL` 为 slave，否则 master）（可选；settings.json `"sidecar.mode"` 优先） |
+| `PI_SIDECAR_MASTER_URL` | slave 节点指向的 master 注册中心地址，slave 模式必填（可选；settings.json `"sidecar.masterUrl"` 优先） |
+| `PI_SIDECAR_REGISTRY_HOST` / `PI_SIDECAR_REGISTRY_PORT` | master 注册中心监听地址，默认 `127.0.0.1:3180`（可选；settings.json `"sidecar.registryHost"` / `"sidecar.registryPort"` 优先） |
+| `PI_SIDECAR_TOKEN` | 注册/心跳/查询接口 Bearer Token，不设则免鉴权（可选；settings.json `"sidecar.token"` 优先） |
+| `PI_SIDECAR_NODE_ID` | 节点 ID，默认 `<hostname>-<workdir 哈希前 6 位>`（可选；settings.json `"sidecar.nodeId"` 优先） |
+| `PI_SIDECAR_HEARTBEAT_INTERVAL` / `PI_SIDECAR_HEARTBEAT_TIMEOUT` / `PI_SIDECAR_OFFLINE_RETENTION` | 心跳间隔/超时判定/离线清理秒数，默认 10 / 30 / 3600（可选；settings.json `"sidecar.heartbeatInterval"` 等优先） |
+| `PI_SIDECAR_BACKOFF_CAP` | pi 崩溃重启退避封顶秒，从 1s 起指数退避，默认 30（可选；settings.json `"sidecar.backoffCap"` 优先） |
+| `PI_SIDECAR_CHILD_CMD` | sidecar 托管的 pi 子进程启动命令，默认 `pi --mode rpc --approve`，可追加 `--continue`、`--session-dir` 等参数（可选；settings.json `"sidecar.childCmd"` 优先） |
+| `PI_STOP_TIMEOUT` | `stop.sh` / `stop.ps1` 等待优雅退出的秒数，超时后强制结束，默认 15（可选；settings.json `"sidecar.stopTimeout"` 优先） |
+
+### 配置来源优先级（从高到低）
+
+sidecar 与 web 配置同时支持 `.env` 和 `.pi/settings.json`（或用户级 `~/.pi/agent/settings.json`），来源优先级：
+
+```
+~/.pi/agent/settings.json → 项目 .pi/settings.json → 环境变量 → 默认值
+```
+
+飞书凭证优先级更高：CLI 标志 → 环境变量 → 两级 settings.json。
+
+litellm 网关配置**仅支持环境变量**，`litellm-provider.ts` 不读取 settings.json，设置不生效。
+
+## 必需扩展
+
+`pi list` 输出即当前真相源，`scripts/init.sh` / `init.ps1` 负责安装与更新，包列表来自 `~/.pi/agent/settings.json` 的 `packages` 字段：
+
+```
+User packages:
+  npm:pi-dsml                              ← 声明式状态机 / DSM 框架
+  git:github.com/Limixxx/pi-feishu@main    ← 飞书 Bot 接入（git @main）
+  git:github.com/Limixxx/pi-subagents@main ← 子代理编排（git @main）
+```
+
+想手动调整依赖，先用 `pi install <source>` / `pi uninstall <source>` 管理本机，再同步更新 init 脚本的 `$RequiredPackages`（ps1）或 `REQUIRED_PACKAGES`（sh）数组，保证新机器初始化时能装上相同依赖。
+
+```bash
+# 手动安装 / 更新 / 卸载
+pi install git:github.com/Limixxx/pi-feishu@main
+pi update --extension git:github.com/Limixxx/pi-feishu@main
+pi uninstall git:github.com/Limixxx/pi-feishu@main
+```
 
 ## RPC 模式
 
@@ -121,13 +154,9 @@ pi 会话内查询：`pi_registry` 工具（`action=list|get|self`）列出全�
 
 ## pi-feishu 扩展
 
-飞书接入由 `npm:pi-feishu` 提供，`scripts/init.sh` 负责安装与版本更新，支持流式输出：
+飞书接入由 `git:github.com/Limixxx/pi-feishu@main` 提供，`scripts/init.sh` / `init.ps1` 负责安装与版本更新。
 
-```bash
-pi install npm:pi-feishu
-```
-
-凭证读取顺序：环境变量 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 优先于 settings.json 中的配置。
+凭证读取顺序（从高到低）：CLI 标志 `--feishu-app-id` / `--feishu-app-secret` → 环境变量 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` → `~/.pi/agent/settings.json` 的 `feishu` 字段 → 项目 `.pi/settings.json` 的 `feishu` 字段。
 
 ## 约定
 
