@@ -139,7 +139,7 @@ rm -f "$FIFO_FILE"
 mkfifo "$FIFO_FILE"
 
 cd "$WORK_DIR"
-nohup pi --mode rpc --approve 0<>"$FIFO_FILE" >>"$LOG_FILE" 2>>"$ERR_FILE" &
+nohup pi --mode rpc --approve --continue --session-dir "$SESS_DIR" 0<>"$FIFO_FILE" >>"$LOG_FILE" 2>>"$ERR_FILE" &
 PID=$!
 
 printf '%s\n' "$PID" > "$PID_FILE"

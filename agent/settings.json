@@ -1,0 +1,7 @@
+{
+  "feishu": {
+    "appId": "cli_aXXXXXXXXXXXXXXXX",
+    "appSecret": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "domain": "feishu"
+  }
+}

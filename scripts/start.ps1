@@ -97,7 +97,9 @@ if ($Keeper) {
 
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $env:ComSpec
-        $psi.Arguments = '/d /s /c "pi --mode rpc --approve"'
+        # pi 子进程启动命令：优先取 .env 的 PI_SIDECAR_CHILD_CMD（与 sidecar 模式统一），否则用默认
+        $childCmd = if ($env:PI_SIDECAR_CHILD_CMD) { $env:PI_SIDECAR_CHILD_CMD } else { 'pi --mode rpc --approve' }
+        $psi.Arguments = "/d /s /c `"$childCmd`""
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $WorkDir

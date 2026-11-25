@@ -1,7 +1,8 @@
 # —— 敏感信息 ——
 .env
 .env.local
-SYSTEM.md
+/SYSTEM.md
+/settings.json
 
 # —— 运行时产物 ——
 sessions/*.log
