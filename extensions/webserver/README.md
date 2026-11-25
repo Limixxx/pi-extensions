@@ -62,6 +62,25 @@ webserver/
 
 注意：当前 `start.sh` / `start.ps1` 写入 `pi-rpc.info` 的是 `stdout_log=` / `stderr_log=` 字段，与第 2 步的键名不匹配，实际通常命中第 3 步约定路径——与启动脚本写入的路径一致，行为正确。调整任一侧字段名时，需同步另一侧与本说明。
 
+## settings.json 覆盖
+
+除环境变量外，Web UI 配置也可通过 `settings.json` 的 `web` 字段配置，**优先级高于环境变量**，仅让取值生效而不改写 `process.env`。读取位置：项目 `<cwd>/.pi/settings.json`（优先级更高）与用户 `~/.pi/agent/settings.json`。示例：
+
+```json
+{
+  "web": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 3170,
+    "token": "your-token",
+    "logStdout": "/abs/path/pi-rpc.log",
+    "logStderr": "/abs/path/pi-rpc.err.log"
+  }
+}
+```
+
+各字段取值规则与对应环境变量一致（`enabled` 支持布尔或 `1/0/true/false` 字符串，`port` 支持数字或数字字符串）；未配置的字段回退到环境变量，最后才用默认值。日志路径对应 `PI_WEB_LOG_STDOUT` / `PI_WEB_LOG_STDERR`。
+
 ## 功能页面
 
 页面为单 Tab 应用，含五个页签：

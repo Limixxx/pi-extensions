@@ -36,14 +36,6 @@ case "${PI_SIDECAR_ENABLED:-1}" in
   *) SIDECAR_ENABLED=1 ;;
 esac
 
-# 载入 .env（PI_SIDECAR_* / FEISHU_* / LITELLM_* 等供子进程使用）
-if [ -f "$PI_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$PI_DIR/.env"
-  set +a
-fi
-
 command -v pi >/dev/null 2>&1 || die "未找到 pi，请先执行 $SCRIPT_DIR/init.sh"
 
 # 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）

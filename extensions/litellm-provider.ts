@@ -6,7 +6,7 @@ const CONFIG = {
   apiKey: process.env.LITELLM_API_KEY?.trim() || "",
   providerId: "maas",
   // 启动/新建会话时默认选中的模型（可用 LITELLM_DEFAULT_MODEL 覆盖）
-  defaultModelId: process.env.LITELLM_DEFAULT_MODEL?.trim() || "GLM-5.3",
+  defaultModelId: process.env.LITELLM_DEFAULT_MODEL?.trim() || "DeepSeek-V4-Flash",
   modelDefaults: {
     reasoning: true,
     input: ["text"],

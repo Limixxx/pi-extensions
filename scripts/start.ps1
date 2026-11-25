@@ -50,22 +50,6 @@ function Write-Fail {
     exit 1
 }
 
-# 解析 .env（shell export 语法），写入当前进程环境变量，供子进程继承
-function Import-DotEnv {
-    param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    foreach ($raw in Get-Content -LiteralPath $Path) {
-        $line = $raw.Trim()
-        if ($line -eq '' -or $line.StartsWith('#')) { continue }
-        $line = $line -replace '^export\s+', ''
-        $idx = $line.IndexOf('=')
-        if ($idx -lt 1) { continue }
-        $name = $line.Substring(0, $idx).Trim()
-        $value = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
-        Set-Item -Path "Env:$name" -Value $value
-    }
-}
-
 function Read-PidFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return 0 }
@@ -92,12 +76,11 @@ function Wait-WebInfo {
 # ──────────────────────────────────────────────────────────
 if ($Keeper) {
     try {
-        Import-DotEnv (Join-Path $PiDir '.env')
         New-Item -ItemType Directory -Force -Path $SessDir | Out-Null
 
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $env:ComSpec
-        # pi 子进程启动命令：优先取 .env 的 PI_SIDECAR_CHILD_CMD（与 sidecar 模式统一），否则用默认
+        # pi 子进程启动命令：优先取 PI_SIDECAR_CHILD_CMD 环境变量（与 sidecar 模式统一），否则用默认
         $childCmd = if ($env:PI_SIDECAR_CHILD_CMD) { $env:PI_SIDECAR_CHILD_CMD } else { 'pi --mode rpc --approve' }
         $psi.Arguments = "/d /s /c `"$childCmd`""
         $psi.UseShellExecute = $false
@@ -180,8 +163,6 @@ if ($env:PI_SIDECAR_ENABLED) {
 if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
     Write-Fail "未找到 pi，请先执行 $(Join-Path $ScriptDir 'init.ps1')"
 }
-
-Import-DotEnv (Join-Path $PiDir '.env')
 
 # 清理上次运行残留的 Web 管理界面信息（正常退出时会由扩展自行清理）
 Remove-Item -LiteralPath $WebInfoFile -Force -ErrorAction SilentlyContinue

@@ -3,5 +3,10 @@
     "appId": "cli_aXXXXXXXXXXXXXXXX",
     "appSecret": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
     "domain": "feishu"
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 33170,
+    "token": "1234567890"
   }
 }

@@ -29,16 +29,101 @@ import { fileURLToPath } from "node:url";
 const EXT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(EXT_DIR, "public");
 
+// ===== settings.json 配置（可选，优先级高于环境变量） =====
+// 读取项目 <cwd>/.pi/settings.json 与用户 ~/.pi/agent/settings.json 的 "web" 字段，
+// 取其值覆盖环境变量参与配置解析。仅让值生效，不改写 process.env。
+// settings.json 示例：
+//   {
+//     "web": {
+//       "enabled": true,
+//       "host": "0.0.0.0",
+//       "port": 3170,
+//       "token": "your-token",
+//       "logStdout": "/abs/path/pi-rpc.log",
+//       "logStderr": "/abs/path/pi-rpc.err.log"
+//     }
+//   }
+
+function loadSettingsWeb(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    const projectPath = path.join(process.cwd(), ".pi", "settings.json");
+    const userPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+    // 用户级在前、项目级在后：后写入者覆盖前者（项目级优先级更高）
+    const files: string[] = [];
+    if (userPath !== projectPath) files.push(userPath);
+    files.push(projectPath);
+    for (const f of files) {
+        try {
+            if (!fs.existsSync(f)) continue;
+            const data = JSON.parse(fs.readFileSync(f, "utf8"));
+            const web = data?.web;
+            if (web && typeof web === "object") Object.assign(out, web);
+        } catch (e) {
+            console.error(`[pi-web] 读取 settings.json 失败(${f}): ${errText(e)}`);
+        }
+    }
+    return out;
+}
+
+const SETTINGS = loadSettingsWeb();
+
+function settingStr(key: string): string | undefined {
+    const v = SETTINGS[key];
+    if (v === undefined || v === null) return undefined;
+    return typeof v === "string" ? v : String(v);
+}
+
+function settingBool(key: string): boolean | null {
+    const v = SETTINGS[key];
+    if (v === undefined || v === null) return null;
+    // 兼容布尔值与 "1"/"true"/"0"/"false" 等字符串
+    return typeof v === "boolean" ? v : parseEnabled(String(v));
+}
+
+function resolveEnabled(): boolean | null {
+    const s = settingBool("enabled");
+    if (s !== null) return s;
+    return parseEnabled(process.env.PI_WEB_ENABLED);
+}
+
+function resolveHost(): string {
+    const s = settingStr("host")?.trim();
+    if (s) return s;
+    return (process.env.PI_WEB_HOST || "127.0.0.1").trim();
+}
+
+function resolvePort(): number {
+    const sv = SETTINGS["port"];
+    if (sv !== undefined && sv !== null) {
+        const n = Number(sv);
+        if (Number.isInteger(n) && n > 0 && n < 65536) return n;
+        console.error(`[pi-web] settings.json 中 web.port 值非法（"${String(sv)}"），回退环境变量/默认端口`);
+    }
+    return parsePort(process.env.PI_WEB_PORT, 3170);
+}
+
+function resolveToken(): string {
+    const s = settingStr("token");
+    if (s !== undefined) return s.trim();
+    return (process.env.PI_WEB_TOKEN || "").trim();
+}
+
+function resolveLogOverride(key: string, envName: string): string {
+    const s = settingStr(key);
+    if (s !== undefined) return s.trim();
+    return (process.env[envName] || "").trim();
+}
+
 const CONFIG = {
     /** null = 自动（仅 RPC 模式启用）；true / false = 强制 */
-    enabled: parseEnabled(process.env.PI_WEB_ENABLED),
-    host: (process.env.PI_WEB_HOST || "").trim() || "127.0.0.1",
-    port: parsePort(process.env.PI_WEB_PORT, 3170),
+    enabled: resolveEnabled(),
+    host: resolveHost(),
+    port: resolvePort(),
     /** 访问令牌（Bearer Token），留空表示不鉴权 */
-    token: (process.env.PI_WEB_TOKEN || "").trim(),
+    token: resolveToken(),
     /** 日志路径覆盖：默认从 <cwd>/.pi/sessions/ 读取 pi-rpc.log / pi-rpc.err.log */
-    stdoutLogOverride: (process.env.PI_WEB_LOG_STDOUT || "").trim(),
-    stderrLogOverride: (process.env.PI_WEB_LOG_STDERR || "").trim(),
+    stdoutLogOverride: resolveLogOverride("logStdout", "PI_WEB_LOG_STDOUT"),
+    stderrLogOverride: resolveLogOverride("logStderr", "PI_WEB_LOG_STDERR"),
     /** sidecar 注册中心：slave 用 master 地址，master 缺省用本机监听地址 */
     sidecarMasterUrl: (process.env.PI_SIDECAR_MASTER_URL || "").trim().replace(/\/+$/, ""),
     sidecarToken: (process.env.PI_SIDECAR_TOKEN || "").trim(),
