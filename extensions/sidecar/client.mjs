@@ -4,7 +4,7 @@
 // - 网络异常退避重试；优雅退出时注销（未注销则由 master 心跳超时判定下线）
 import {
     CFG, PATHS, HOSTNAME, WORK_DIR, localAddresses, readInfoFile,
-    writeTextAtomic, log, sleep,
+    readTextSafe, writeTextAtomic, log, sleep,
 } from "./common.mjs";
 
 const REQUEST_TIMEOUT_MS = 5000;
@@ -22,6 +22,8 @@ export function buildRecord(supStats) {
         workdir: WORK_DIR,
         platform: process.platform,
         mode: CFG.mode,
+        // 本节点系统提示内容（pi 扩展捕获写入 sessions/system-message.txt，非直接读 SYSTEM.md）
+        system_md: readTextSafe(PATHS.systemPrompt) || "",
         sidecar: {
             pid: process.pid,
             started_at: supStats?.startedAtIso || "",

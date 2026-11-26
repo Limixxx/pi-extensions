@@ -140,7 +140,8 @@ export function startRegistry() {
 
     function htmlPage() {
         const now = Date.now();
-        const rows = [...nodes.values()].map((rec) => {
+        const systemDocs = []; // 每个节点的系统提示内容（供弹窗展示）
+        const rows = [...nodes.values()].map((rec, i) => {
             const status = computeStatus(rec, now);
             const color = status === "online" ? "#0a0" : "#c00";
             const pi = rec.pi || {};
@@ -149,8 +150,12 @@ export function startRegistry() {
             const web = pi.web_url
                 ? `<a href="${pi.web_url}" target="_blank">${pi.web_url}</a>`
                 : "-";
+            systemDocs.push(String(rec.system_md || ""));
+            const sysBtn = rec.system_md
+                ? `<br><a href="#" onclick="showSystem(${i});return false;">查看 SYSTEM</a>`
+                : "";
             return `<tr>
-<td>${esc(rec.node_id)}</td><td>${esc(rec.hostname || "-")}<br><small>${esc(addr)}</small></td>
+<td>${esc(rec.node_id)}${sysBtn}</td><td>${esc(rec.hostname || "-")}<br><small>${esc(addr)}</small></td>
 <td>${esc(rec.mode || "-")}</td><td style="color:${color}">${status}</td>
 <td>${pi.pid ?? "-"}</td><td>${web}</td><td><small>${esc(pi.rpc_path || "-")}</small></td>
 <td>${hb}</td></tr>`;
@@ -160,11 +165,21 @@ export function startRegistry() {
 <style>body{font-family:system-ui,sans-serif;margin:24px;background:#fafafa;color:#222}
 table{border-collapse:collapse;background:#fff;box-shadow:0 1px 3px #0002}
 th,td{border:1px solid #ddd;padding:6px 10px;font-size:14px;text-align:left;vertical-align:top}
-th{background:#f0f0f0}small{color:#888}h1{font-size:20px}</style></head><body>
+th{background:#f0f0f0}small{color:#888}h1{font-size:20px}
+#mask{display:none;position:fixed;inset:0;background:#0008;z-index:10}
+#dlg{display:none;position:fixed;top:8%;left:10%;right:10%;bottom:8%;z-index:11;background:#fff;border-radius:8px;box-shadow:0 4px 24px #000a;flex-direction:column}
+#dlg header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #ddd}
+#dlg h3{margin:0;font-size:16px}
+#dlg pre{flex:1;overflow:auto;padding:12px 14px;margin:0;font-size:12px;white-space:pre-wrap;word-break:break-all}
+#dlg button{border:1px solid #ccc;background:#f5f5f5;border-radius:4px;padding:4px 12px;cursor:pointer}</style></head><body>
 <h1>pi sidecar 注册中心 — ${esc(CFG.nodeId)}</h1>
 <p><small>节点 ${nodes.size} 个 · 心跳超时 ${Math.round(CFG.hbTimeoutMs / 1000)}s · 页面每 5s 自动刷新 · 数据接口 <code>GET /api/nodes</code></small></p>
 <table><thead><tr><th>节点 ID</th><th>主机</th><th>模式</th><th>状态</th><th>pi pid</th><th>Web UI</th><th>RPC 入口</th><th>最近心跳</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="8">暂无注册节点</td></tr>'}</tbody></table></body></html>`;
+<tbody>${rows || '<tr><td colspan="8">暂无注册节点</td></tr>'}</tbody></table>
+<div id="mask" onclick="closeSystem()"></div>
+<div id="dlg"><header><h3>SYSTEM 内容</h3><button onclick="closeSystem()">关闭</button></header><pre id="sysContent"></pre></div>
+<script>const systemDocs=${JSON.stringify(systemDocs)};function showSystem(i){if(systemDocs[i]){document.getElementById("sysContent").textContent=systemDocs[i];document.getElementById("mask").style.display="block";document.getElementById("dlg").style.display="flex";}}function closeSystem(){document.getElementById("mask").style.display="none";document.getElementById("dlg").style.display="none";}</script>
+</body></html>`;
     }
 
     function esc(s) {

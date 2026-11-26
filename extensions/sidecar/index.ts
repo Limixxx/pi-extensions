@@ -29,6 +29,7 @@ const SESS_DIR = path.resolve(EXT_DIR, "..", "..", "sessions");
 const REGISTRY_JSON = path.join(SESS_DIR, "registry.json");
 const SELF_JSON = path.join(SESS_DIR, "self.json");
 const SIDECAR_INFO = path.join(SESS_DIR, "pi-sidecar.info");
+const SYSTEM_PROMPT_FILE = path.join(SESS_DIR, "system-message.txt");
 
 const REQUEST_TIMEOUT_MS = 5000;
 
@@ -174,6 +175,19 @@ function renderSelf(): string {
 }
 
 export default function (pi: ExtensionAPI) {
+    // ── 捕获当前系统提示（含 SYSTEM.md 内容），供 sidecar 注册时上报，非直接读源文件 ──
+    pi.on("before_agent_start", async (_event: any, ctx: any) => {
+        try {
+            const prompt: string = ctx?.getSystemPrompt?.();
+            if (typeof prompt === "string" && prompt.length) {
+                fs.mkdirSync(SESS_DIR, { recursive: true });
+                fs.writeFileSync(SYSTEM_PROMPT_FILE, prompt, "utf8");
+            }
+        } catch (e: any) {
+            console.error(`[pi-sidecar] 捕获系统提示失败: ${e?.message || e}`);
+        }
+    });
+
     // ── pi_registry 工具：查询注册中心节点 ──────────────────
     pi.registerTool({
         name: "pi_registry",

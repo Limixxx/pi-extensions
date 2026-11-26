@@ -28,6 +28,8 @@ export const PATHS = {
     stopFlag: path.join(SESS_DIR, "pi-sidecar.stop"),
     registryJson: path.join(SESS_DIR, "registry.json"),
     selfJson: path.join(SESS_DIR, "self.json"),
+    // 本节点系统提示内容（由 pi 扩展在 before_agent_start 时捕获写入，不直接读 SYSTEM.md 源文件）
+    systemPrompt: path.join(SESS_DIR, "system-message.txt"),
 };
 
 function envStr(name) {
@@ -220,6 +222,15 @@ export function writeTextAtomic(p, text) {
     const tmp = `${p}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, text, "utf8");
     fs.renameSync(tmp, p);
+}
+
+/** 安全读文本（缺失返回空串） */
+export function readTextSafe(p) {
+    try {
+        return fs.readFileSync(p, "utf8");
+    } catch {
+        return "";
+    }
 }
 
 /** 安全读 JSON（缺失/损坏返回 null） */
