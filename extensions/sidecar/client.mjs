@@ -11,6 +11,13 @@ const REQUEST_TIMEOUT_MS = 5000;
 const DEREGISTER_TIMEOUT_MS = 2500;
 const MAX_BACKOFF_MS = 30_000;
 
+/** 本节点可被 master 访问的中继地址：取 LAN IPv4 任一，无则回退 hostname/loopback */
+function makeRpcUrl() {
+    if (!CFG.relayPort) return "";
+    const addr = localAddresses()[0] || HOSTNAME || "127.0.0.1";
+    return `http://${addr}:${CFG.relayPort}`;
+}
+
 /** 采集本节点注册信息（每次调用重新读取 info 文件，保证 pi 重启后信息最新） */
 export function buildRecord(supStats) {
     const rpc = readInfoFile(PATHS.rpcInfo);
@@ -35,6 +42,8 @@ export function buildRecord(supStats) {
             command: rpc.command || CFG.childCmd,
             rpc_kind: rpc.pipe ? "pipe" : "fifo",
             rpc_path: rpc.pipe || rpc.fifo || "",
+            // 每节点 RPC 中继地址：master 据此跨机转发消息（用任一可达地址）
+            rpc_url: makeRpcUrl(),
             web_url: web.url || "",
             web_port: Number(web.port) || 0,
             session_file: web.session_file || "",

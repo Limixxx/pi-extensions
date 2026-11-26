@@ -20,6 +20,7 @@ import {
 } from "./common.mjs";
 import { startSupervisor } from "./supervisor.mjs";
 import { startRegistry } from "./registry.mjs";
+import { startRelay } from "./relay.mjs";
 import { startRegistration, buildRecord } from "./client.mjs";
 
 process.title = "pi-sidecar";
@@ -74,6 +75,7 @@ writeSidecarInfo();
 // ── 核心组件 ─────────────────────────────────────────────
 const state = { stopping: false, stopPromise: null };
 let registry = null; // master 模式的注册中心句柄
+let relay = null;     // 每节点 RPC 中继句柄
 let registration = null;
 
 const supervisor = startSupervisor({
@@ -100,6 +102,7 @@ async function gracefulStop(reason) {
             await supervisor.stopGraceful();             // 1. 停止子进程（含等待与强杀）
             if (registration) await registration.stop(); // 2. 从 master 注销（尽力而为）
             if (registry) await registry.close();        // 3. 落盘注册表并关闭监听
+            if (relay) await relay.close();              // 4. 关闭本节点 RPC 中继
         } catch (e) {
             log(`停止流程异常: ${e.message}`);
         }
@@ -135,6 +138,16 @@ if (CFG.mode === "master") {
         log("注册中心启动失败，sidecar 退出（请检查 PI_SIDECAR_REGISTRY_HOST/PORT 是否被占用）");
         await gracefulStop("registry-bind-failed");
     }
+}
+
+// ── RPC 中继：所有节点（master/slave）均启动，供跨机消息转发落点 ──
+try {
+    relay = await startRelay();
+    writeSidecarInfo({ rpc_url: relay.url });
+    log(`RPC 中继已启动: ${relay.url}`);
+} catch (e) {
+    relay = null;
+    log(`RPC 中继启动失败（跨机消息将不可用，可设 PI_SIDECAR_RELAY_HOST/PORT 调整）: ${e.message}`);
 }
 
 // ── 注册与心跳（master 注册到自身，slave 注册到远端）─────

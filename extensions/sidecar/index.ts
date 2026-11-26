@@ -233,6 +233,52 @@ export default function (pi: ExtensionAPI) {
         },
     });
 
+    // ── pi_message 工具：向已注册节点发送 RPC 消息并取回回复 ──
+    pi.registerTool({
+        name: "pi_message",
+        label: "pi Send Message",
+        description:
+            "向 sidecar 注册中心中的某个已注册节点发送一条 RPC prompt 消息，并取回该节点的最终回复。" +
+            "用于跨实例向其他 pi 节点下发任务/提问（需 target 节点与 master 同机，且其 sidecar 在运行）。",
+        parameters: Type.Object({
+            node: Type.String({ description: "目标节点 ID（node_id）" }),
+            message: Type.String({ description: "要发送的消息内容" }),
+        }),
+        async execute(_id: any, params: any) {
+            try {
+                const node = String(params?.node || "").trim();
+                const message = String(params?.message || "").trim();
+                if (!node) return { content: [{ type: "text", text: "缺少 node 参数（目标节点 ID）" }], details: {} };
+                if (!message) return { content: [{ type: "text", text: "缺少 message 参数（要发送的内容）" }], details: {} };
+
+                const url = queryUrl();
+                if (!url) {
+                    return { content: [{ type: "text", text: "注册中心不可用：未配置 PI_SIDECAR_MASTER_URL 且本地无 info 文件" }], details: {} };
+                }
+                const headers: Record<string, string> = { "Content-Type": "application/json; charset=utf-8" };
+                const token = envStr("PI_SIDECAR_TOKEN");
+                if (token) headers.Authorization = `Bearer ${token}`;
+                const res = await fetch(`${url}/api/message`, {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({ node_id: node, message }),
+                    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                });
+                const data: any = await res.json().catch(() => null);
+                if (!res.ok) {
+                    return { content: [{ type: "text", text: `消息发送失败 (HTTP ${res.status}): ${data?.error || "未知错误"}` }], details: {} };
+                }
+                const reply = data?.reply;
+                const lines: string[] = [];
+                lines.push(`已发送 → ${node}`);
+                lines.push(`回复: ${reply == null ? "（无回复文本）" : reply}`);
+                return { content: [{ type: "text", text: lines.join("\n") }], details: { node_id: data?.node_id, reply } };
+            } catch (e: any) {
+                return { content: [{ type: "text", text: `发送失败: ${e?.message || String(e)}` }], details: {} };
+            }
+        },
+    });
+
     // ── /sidecar 斜杠命令：查看本机 sidecar 与注册中心摘要 ──
     pi.registerCommand("sidecar", {
         description: "查看 sidecar 守护进程与注册中心状态（节点列表见 pi_registry 工具）",

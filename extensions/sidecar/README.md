@@ -15,8 +15,10 @@
 | `supervisor.mjs` | 子进程守护：Linux 经 FIFO r+ 提供 stdin；Windows 经 cmd 垫片持有 stdin + 命名管道转发；崩溃指数退避重启（1s 起翻倍，封顶 `PI_SIDECAR_BACKOFF_CAP`，存活 60s 重置） |
 | `registry.mjs` | master 注册中心：HTTP 服务、token 鉴权、HTML 状态页、`registry.json` 持久化（500ms 去抖原子写）、心跳超时/离线清理扫描 |
 | `client.mjs` | 注册与心跳：首次直接注册，心跳携带全量最新信息；404 自动重注册；失败退避；`self.json` 本地留档；停止时尽力注销 |
+| `relay.mjs` | 每节点 RPC 中继：`POST /api/rpc` 把消息投递给本机被监督 pi 并返回回复（跨机消息落点） |
+| `message.mjs` | RPC 消息收发：跨机经目标 `pi.rpc_url` HTTP 转发；同机直连管道/FIFO + 读 stdout_log |
 | `common.mjs` | 路径（从 `import.meta.url` 推导，不依赖 cwd）、环境变量解析、info 文件读写等共享工具 |
-| `index.ts` | pi 扩展：`pi_registry` 工具（`action=list|get|self`）、`/sidecar` 命令 |
+| `index.ts` | pi 扩展：`pi_registry` 工具（`action=list|get|self`）、`pi_message` 工具、`/sidecar` 命令 |
 
 ## 模式与拓扑
 
@@ -32,7 +34,7 @@
   "sidecar": { "pid": 123, "started_at": "…", "restarts": 2 },
   "pi": { "pid": 456, "started_at": "…", "command": "pi --mode rpc --approve",
           "rpc_kind": "fifo", "rpc_path": "…/pi-rpc.fifo",
-          "web_url": "http://10.0.0.5:3170/", "web_port": 3170, "session_file": "…" },
+          "web_url": "http://10.0.0.5:3170/", "web_port": 3170, "session_file": "…", "rpc_url": "http://10.0.0.5:33190" },
   "registered_at": 0, "last_heartbeat": 0, "status": "online"
 }
 ```
@@ -50,8 +52,31 @@
 | `POST /api/register` | 注册/刷新节点（body 为节点记录） |
 | `POST /api/heartbeat` | 心跳；未知节点返回 404（客户端据此重注册） |
 | `POST /api/deregister` | 注销（body：`{node_id}`） |
+| `POST /api/message` | 向某节点发送 RPC 消息并取回回复（body：`{node_id, message}`，需目标节点同机且在线） |
 
 设置 `PI_SIDECAR_TOKEN` 后，除 `/healthz` 与状态页外均需 `Authorization: Bearer <token>`（或 `?token=`）。
+
+## 发送 RPC 消息
+
+master 可将一条 prompt 消息转发给注册表中的任意在线节点，并取回该节点的最终回复（`pi_registry` 的 RPC
+接口）。由 `/api/message` 提供，pi 扩展侧对应 `pi_message` 工具：
+
+```bash
+# 经 API
+curl -X POST http://127.0.0.1:3180/api/message \
+  -H "Content-Type: application/json" \
+  -d '{"node_id":"host-abc123","message":"当前工作目录是哪个"}'
+# → {"ok":true,"node_id":"host-abc123","reply":"当前工作目录是 …"}
+```
+
+**跨机实现**：master 拿到目标节点后，若节点上报了 `pi.rpc_url`，则将消息经 HTTP 转发到该地址的
+`/api/rpc`（`relay.mjs`），由目标节点**本机**把消息投递给自己监督的 pi 并读本机 stdout_log 返回回复——
+跨机无需共享文件系统或直连命名管道。未上报 `rpc_url` 的旧节点回退到同机直连。目标节点离线返回 `409`，
+默认超时 120s。
+
+每节点默认中继地址 `http://<LAN-IP>:<派生端口>`，派生端口由 workdir 哈希决定（30000..49999，同机多
+实例不冲突），可用 `PI_SIDECAR_RELAY_HOST`/`PI_SIDECAR_RELAY_PORT` 覆盖；中继同样受 `PI_SIDECAR_TOKEN`
+鉴权。
 
 ## 生命周期
 

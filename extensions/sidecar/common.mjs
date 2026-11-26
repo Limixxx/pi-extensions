@@ -130,6 +130,11 @@ export const CFG = (() => {
     }
     const registryHost = resolveStr("registryHost", "PI_SIDECAR_REGISTRY_HOST") || "127.0.0.1";
     const registryPort = resolveInt("registryPort", "PI_SIDECAR_REGISTRY_PORT", 3180, { min: 1, max: 65535 });
+    // 每节点 RPC HTTP 中继：由工作目录哈希派生默认端口，保证同机多实例不冲突；可覆盖
+    const relayHost = resolveStr("relayHost", "PI_SIDECAR_RELAY_HOST") || "0.0.0.0";
+    const relayPort =
+        resolveInt("relayPort", "PI_SIDECAR_RELAY_PORT", 0, { min: 1, max: 65535 }) ||
+        defaultRelayPort();
     return {
         rawMode,
         mode,
@@ -147,12 +152,22 @@ export const CFG = (() => {
         retentionMs: resolveInt("offlineRetention", "PI_SIDECAR_OFFLINE_RETENTION", 3600) * 1000,
         backoffCapMs: resolveInt("backoffCap", "PI_SIDECAR_BACKOFF_CAP", 30) * 1000,
         stopTimeoutMs: resolveInt("stopTimeout", "PI_STOP_TIMEOUT", 15) * 1000,
+        // 每节点 RPC HTTP 中继
+        relayHost,
+        relayPort,
+        relayUrl: `http://${relayHost}:${relayPort}`,
         // 被监督子进程命令（PI_SIDECAR_CHILD_CMD 仅用于测试替换）
         childCmd: resolveStr("childCmd", "PI_SIDECAR_CHILD_CMD") || "pi --mode rpc --approve",
     };
 })();
 
 export const HOSTNAME = os.hostname();
+
+/** 每节点默认 RPC 中继端口：由 workdir 哈希派生，30000..49999，同机多实例不冲突；可覆盖 */
+export function defaultRelayPort() {
+    const h = crypto.createHash("sha1").update(WORK_DIR).digest("hex");
+    return 30000 + (parseInt(h.slice(0, 5), 16) % 20000);
+}
 
 /** 本机对外 IPv4 地址列表（排除回环） */
 export function localAddresses() {

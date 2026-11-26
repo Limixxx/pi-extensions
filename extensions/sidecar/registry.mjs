@@ -6,6 +6,7 @@ import http from "node:http";
 import {
     CFG, PATHS, readJsonSafe, writeTextAtomic, log, nowIso,
 } from "./common.mjs";
+import { sendMessage } from "./message.mjs";
 
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -245,6 +246,26 @@ th{background:#f0f0f0}small{color:#888}h1{font-size:20px}
                 if (nodes.delete(id)) log(`节点注销: ${id}（剩余 ${nodes.size} 个）`);
                 persistSoon();
                 return sendJson(res, 200, { ok: true });
+            }
+            if (req.method === "POST" && p === "/api/message") {
+                const payload = await readBody(req);
+                const nodeId = String(payload?.node_id || "").trim();
+                const msg = String(payload?.message || "").trim();
+                if (!nodeId || !msg) {
+                    return sendJson(res, 400, { ok: false, error: "node_id and message are required" });
+                }
+                const rec = nodes.get(nodeId);
+                if (!rec) return sendJson(res, 404, { ok: false, error: `unknown node: ${nodeId}` });
+                if (computeStatus(rec) !== "online") {
+                    return sendJson(res, 409, { ok: false, error: `node ${nodeId} is offline` });
+                }
+                try {
+                    const reply = await sendMessage(rec, msg);
+                    return sendJson(res, 200, { ok: true, node_id: nodeId, reply });
+                } catch (e) {
+                    log(`消息发送失败 → ${nodeId}: ${e.message}`);
+                    return sendJson(res, 502, { ok: false, error: `发送消息失败: ${e.message}` });
+                }
             }
             sendJson(res, 404, { ok: false, error: `not found: ${req.method} ${p}` });
         } catch (e) {
