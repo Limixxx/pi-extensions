@@ -12,6 +12,8 @@ sessions/*.fifo
 sessions/*.stop
 sessions/*.json
 sessions/*.jsonl
+sessions/*.txt
+sessions/*.txtl
 
 *.lock
 *.tmp

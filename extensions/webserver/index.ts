@@ -438,6 +438,7 @@ function normalizeNode(rec: any, now: number, selfId: string) {
             restarts: Number(sc.restarts) || 0,
             startedAt: sc.started_at ?? null,
         },
+        systemMd: String(rec?.system_md ?? ""),
     };
 }
 
